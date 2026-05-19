@@ -1,15 +1,42 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+
+interface Agent {
+  id: string
+  user_id: string
+  prenom: string
+  nom: string
+  equipe_id: string
+  [key: string]: any
+}
+
+interface FicheDuJour {
+  id: string
+  agent_id: string
+  equipe_id: string
+  date: string
+  comptes_ouverts: number
+  comptes_actives: number
+  montant_mobilise: number
+  montant_rapporte: number
+  nb_depots: number
+  prospects_visites: number
+  clients_suivis: number
+  assurances_vendues: number
+  montant_assurances: number
+  manquant_regle?: boolean
+  [key: string]: any
+}
 
 export default function FicheJournaliere() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
-  const [success, setSuccess] = useState(false)
-  const [agent, setAgent] = useState<any>(null)
-  const [ficheDuJour, setFicheDuJour] = useState<any>(null)
+  const [, setSuccess] = useState(false)
+  const [agent, setAgent] = useState<Agent | null>(null)
+  const [ficheDuJour, setFicheDuJour] = useState<FicheDuJour | null>(null)
   const [files, setFiles] = useState<File[]>([])
   const [form, setForm] = useState({
     comptes_ouverts: '',
