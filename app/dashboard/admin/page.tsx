@@ -4,140 +4,238 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 
-type Agent = {
-  id: string
-  nom: string
-  prenom: string
-  email: string
-  telephone: string
-  role: string
-  statut: string
-  actif: boolean
-  agence_id: string
-  created_at: string
-  agences?: { nom: string }
-}
-
-type Tab = 'overview' | 'users' | 'create'
+type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres'
 
 export default function DashboardAdmin() {
   const router = useRouter()
-  const [tab, setTab] = useState<Tab>('overview')
-  const [agents, setAgents] = useState<Agent[]>([])
-  const [agences, setAgences] = useState<any[]>([])
+  const [tab, setTab] = useState<Tab>('dashboard')
+  const [sidebarOpen, setSidebarOpen] = useState(true)
   const [loading, setLoading] = useState(true)
-  const [search, setSearch] = useState('')
-  const [filterRole, setFilterRole] = useState('tous')
-  const [filterStatut, setFilterStatut] = useState('tous')
-  const [filterAgence, setFilterAgence] = useState('tous')
-  const [editingAgent, setEditingAgent] = useState<Agent | null>(null)
-  const [showEditModal, setShowEditModal] = useState(false)
-  const [actionLoading, setActionLoading] = useState<string | null>(null)
-  const [createLoading, setCreateLoading] = useState(false)
-  const [createSuccess, setCreateSuccess] = useState(false)
-  const [createError, setCreateError] = useState('')
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState<string | null>(null)
+  const [admin, setAdmin] = useState<any>(null)
 
-  const [createForm, setCreateForm] = useState({
-    prenom: '', nom: '', email: '', telephone: '',
-    agence: '', role: 'agent', password: ''
+  // Data
+  const [stats, setStats] = useState({
+    totalAgents: 0, totalAgences: 0,
+    collecteAujourdhui: 0, collecteMois: 0,
+    agentsEnAttente: 0, manquantsTotal: 0,
+    fichesNonValides: 0, tauxPerformance: 0,
+  })
+  const [topAgents, setTopAgents] = useState<any[]>([])
+  const [agencesStats, setAgencesStats] = useState<any[]>([])
+  const [alertes, setAlertes] = useState<any[]>([])
+  const [evolutionMensuelle, setEvolutionMensuelle] = useState<any[]>([])
+
+  // Agences
+  const [agences, setAgences] = useState<any[]>([])
+  const [agenceSearch, setAgenceSearch] = useState('')
+  const [agenceFilter, setAgenceFilter] = useState('tous')
+  const [showAgenceModal, setShowAgenceModal] = useState(false)
+  const [editingAgence, setEditingAgence] = useState<any>(null)
+  const [deleteAgenceConfirm, setDeleteAgenceConfirm] = useState<string | null>(null)
+  const [agenceLoading, setAgenceLoading] = useState(false)
+  const [agenceForm, setAgenceForm] = useState({
+    nom: '', region: '', adresse: '', telephone: '', email: '', actif: true
   })
 
-  useEffect(() => { loadData() }, [])
+  // Zones
+const [selectedAgenceZones, setSelectedAgenceZones] = useState<any>(null)
+const [zones, setZones] = useState<any[]>([])
+const [showZoneModal, setShowZoneModal] = useState(false)
+const [editingZone, setEditingZone] = useState<any>(null)
+const [deleteZoneConfirm, setDeleteZoneConfirm] = useState<string | null>(null)
+const [zoneLoading, setZoneLoading] = useState(false)
+const [zoneForm, setZoneForm] = useState({ numero: '', nom: '' })
 
-  async function loadData() {
+  const today = new Date().toISOString().split('T')[0]
+  const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
+
+  useEffect(() => { loadAll() }, [])
+
+  async function loadAll() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { router.push('/login'); return }
-
-    const { data: me } = await supabase
-      .from('agents').select('role').eq('user_id', user.id).single()
+    const { data: me } = await supabase.from('agents').select('*').eq('user_id', user.id).single()
     if (!me || me.role !== 'admin') { router.push('/login'); return }
+    setAdmin(me)
 
-    const { data: agentsData } = await supabase
-      .from('agents')
-      .select('*, agences(nom)')
-      .order('created_at', { ascending: false })
-    setAgents(agentsData || [])
-
-    const { data: agencesData } = await supabase
-      .from('agences').select('*').order('nom')
-    setAgences(agencesData || [])
-
+    await Promise.all([loadStats(), loadAgences()])
     setLoading(false)
   }
 
-  async function updateStatut(id: string, statut: string) {
-    setActionLoading(id + statut)
-    await supabase.from('agents').update({ statut, actif: statut === 'actif' }).eq('id', id)
-    setAgents(prev => prev.map(a => a.id === id ? { ...a, statut, actif: statut === 'actif' } : a))
-    setActionLoading(null)
+  async function loadStats() {
+    const [
+      { count: totalAgents },
+      { count: totalAgences },
+      { data: fichesAujourdhui },
+      { data: fichesMois },
+      { count: agentsEnAttente },
+      { data: manquants },
+      { count: fichesNonValides },
+    ] = await Promise.all([
+      supabase.from('agents').select('*', { count: 'exact', head: true }).not('role', 'eq', 'admin'),
+      supabase.from('agences').select('*', { count: 'exact', head: true }),
+      supabase.from('fiches_journalieres').select('montant_mobilise, montant_rapporte').eq('date', today),
+      supabase.from('fiches_journalieres').select('montant_mobilise, montant_rapporte, agent_id').gte('date', moisDebut),
+      supabase.from('agents').select('*', { count: 'exact', head: true }).eq('statut', 'en_attente'),
+      supabase.from('fiches_journalieres').select('montant_mobilise, montant_rapporte').eq('manquant_regle', false),
+      supabase.from('fiches_journalieres').select('*', { count: 'exact', head: true }).eq('valide_chef', false),
+    ])
+
+    const collecteAujourdhui = (fichesAujourdhui || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+    const collecteMois = (fichesMois || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+    const manquantsTotal = (manquants || []).reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
+
+    setStats({
+      totalAgents: totalAgents || 0,
+      totalAgences: totalAgences || 0,
+      collecteAujourdhui,
+      collecteMois,
+      agentsEnAttente: agentsEnAttente || 0,
+      manquantsTotal,
+      fichesNonValides: fichesNonValides || 0,
+      tauxPerformance: collecteMois > 0 ? Math.min(100, Math.round((collecteMois / (25000 * 30)) * 100)) : 0,
+    })
+
+    // Top agents du mois
+    const agentCollecte: Record<string, number> = {}
+    ;(fichesMois || []).forEach(f => {
+      agentCollecte[f.agent_id] = (agentCollecte[f.agent_id] || 0) + (f.montant_mobilise || 0)
+    })
+    const topIds = Object.entries(agentCollecte).sort((a, b) => b[1] - a[1]).slice(0, 5)
+    if (topIds.length > 0) {
+      const { data: topData } = await supabase.from('agents').select('id, nom, prenom, agences(nom)').in('id', topIds.map(t => t[0]))
+      setTopAgents(topIds.map(([id, montant]) => ({ ...topData?.find(a => a.id === id), montant })))
+    }
+
+    // Alertes
+    const alertesList = []
+    if ((agentsEnAttente || 0) > 0) alertesList.push({ type: 'warning', message: `${agentsEnAttente} compte(s) en attente d'activation`, action: 'agents' })
+    if (manquantsTotal > 0) alertesList.push({ type: 'error', message: `${manquantsTotal.toLocaleString()} FCFA de manquants non réglés`, action: 'fiches' })
+    if ((fichesNonValides || 0) > 0) alertesList.push({ type: 'info', message: `${fichesNonValides} fiche(s) en attente de validation`, action: 'fiches' })
+    setAlertes(alertesList)
+
+    // Évolution 6 derniers mois
+    const evolution = []
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date()
+      d.setMonth(d.getMonth() - i)
+      const debut = new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0]
+      const fin = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
+      const { data: mData } = await supabase.from('fiches_journalieres').select('montant_mobilise').gte('date', debut).lte('date', fin)
+      const total = (mData || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+      evolution.push({
+        mois: d.toLocaleDateString('fr-FR', { month: 'short' }),
+        total,
+        pct: total > 0 ? Math.min(100, Math.round(total / 1000000 * 100)) : 0
+      })
+    }
+    setEvolutionMensuelle(evolution)
   }
 
-  async function deleteAgent(id: string) {
-    setActionLoading(id + 'delete')
-    await supabase.from('agents').delete().eq('id', id)
-    setAgents(prev => prev.filter(a => a.id !== id))
-    setShowDeleteConfirm(null)
-    setActionLoading(null)
+  async function loadAgences() {
+    const { data } = await supabase.from('agences').select('*').order('nom')
+    const agencesWithStats = await Promise.all((data || []).map(async agence => {
+      const { count: nbAgents } = await supabase.from('agents').select('*', { count: 'exact', head: true }).eq('agence_id', agence.id)
+      const { count: nbZones } = await supabase.from('zones').select('*', { count: 'exact', head: true }).eq('agence_id', agence.id)
+      const { data: fiches } = await supabase.from('fiches_journalieres').select('montant_mobilise').eq('date', new Date().toISOString().split('T')[0])
+      const collecte = (fiches || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+      return { ...agence, nbAgents: nbAgents || 0, nbZones: nbZones || 0, collecteJour: collecte }
+    }))
+    setAgences(agencesWithStats)
+
+    // Stats agences pour dashboard
+    setAgencesStats(agencesWithStats.map(a => ({ nom: a.nom, nbAgents: a.nbAgents, collecte: a.collecteJour })))
   }
 
-  async function saveEdit() {
-    if (!editingAgent) return
-    setActionLoading('edit')
-    await supabase.from('agents').update({
-      nom: editingAgent.nom,
-      prenom: editingAgent.prenom,
-      telephone: editingAgent.telephone,
-      role: editingAgent.role,
-      agence_id: editingAgent.agence_id,
-    }).eq('id', editingAgent.id)
-    setAgents(prev => prev.map(a => a.id === editingAgent.id ? { ...a, ...editingAgent } : a))
-    setShowEditModal(false)
-    setEditingAgent(null)
-    setActionLoading(null)
-  }
-
-  async function handleCreate(e: React.FormEvent) {
+  async function saveAgence(e: React.FormEvent) {
     e.preventDefault()
-    setCreateLoading(true)
-    setCreateError('')
-
-    const { data, error: authError } = await supabase.auth.signUp({
-      email: createForm.email,
-      password: createForm.password,
-    })
-
-    if (authError || !data.user) {
-      setCreateError(authError?.message || 'Erreur création compte')
-      setCreateLoading(false)
-      return
+    setAgenceLoading(true)
+    if (editingAgence) {
+      await supabase.from('agences').update(agenceForm).eq('id', editingAgence.id)
+      setAgences(prev => prev.map(a => a.id === editingAgence.id ? { ...a, ...agenceForm } : a))
+    } else {
+      const { data } = await supabase.from('agences').insert(agenceForm).select().single()
+      if (data) setAgences(prev => [...prev, { ...data, nbAgents: 0, collecteJour: 0 }])
     }
+    setShowAgenceModal(false)
+    setEditingAgence(null)
+    setAgenceForm({ nom: '', region: '', adresse: '', telephone: '', email: '', actif: true })
+    setAgenceLoading(false)
+  }
 
-    const agence = agences.find(a => a.nom === createForm.agence)
+  async function toggleAgence(id: string, actif: boolean) {
+    await supabase.from('agences').update({ actif }).eq('id', id)
+    setAgences(prev => prev.map(a => a.id === id ? { ...a, actif } : a))
+  }
 
-    const { error: insertError } = await supabase.from('agents').insert({
-      user_id: data.user.id,
-      nom: createForm.nom,
-      prenom: createForm.prenom,
-      email: createForm.email,
-      telephone: createForm.telephone,
-      agence_id: agence?.id || null,
-      role: createForm.role,
-      actif: true,
-      statut: 'actif',
-    })
+  async function deleteAgence(id: string) {
+    await supabase.from('agences').delete().eq('id', id)
+    setAgences(prev => prev.filter(a => a.id !== id))
+    setDeleteAgenceConfirm(null)
+  }
 
-    if (insertError) {
-      setCreateError(insertError.message)
-      setCreateLoading(false)
-      return
+  async function loadZones(agence: any) {
+    setSelectedAgenceZones(agence)
+    const { data } = await supabase
+      .from('zones')
+      .select('*')
+      .eq('agence_id', agence.id)
+      .order('numero')
+    setZones(data || [])
+  }
+  
+  async function saveZone(e: React.FormEvent) {
+    e.preventDefault()
+    setZoneLoading(true)
+    if (editingZone) {
+      await supabase.from('zones').update({
+        numero: parseInt(zoneForm.numero),
+        nom: zoneForm.nom,
+      }).eq('id', editingZone.id)
+      setZones(prev => prev.map(z => z.id === editingZone.id
+        ? { ...z, numero: parseInt(zoneForm.numero), nom: zoneForm.nom } : z))
+    } else {
+      const { data } = await supabase.from('zones').insert({
+        agence_id: selectedAgenceZones.id,
+        numero: parseInt(zoneForm.numero),
+        nom: zoneForm.nom,
+      }).select().single()
+      if (data) setZones(prev => [...prev, data])
     }
+    setShowZoneModal(false)
+    setEditingZone(null)
+    setZoneForm({ numero: '', nom: '' })
+    setZoneLoading(false)
+  }
+  
+  async function deleteZone(id: string) {
+    await supabase.from('zones').delete().eq('id', id)
+    setZones(prev => prev.filter(z => z.id !== id))
+    setDeleteZoneConfirm(null)
+  }
+  
+  function openCreateZone() {
+    setEditingZone(null)
+    setZoneForm({ numero: '', nom: '' })
+    setShowZoneModal(true)
+  }
+  
+  function openEditZone(zone: any) {
+    setEditingZone(zone)
+    setZoneForm({ numero: zone.numero.toString(), nom: zone.nom || '' })
+    setShowZoneModal(true)
+  }
 
-    setCreateSuccess(true)
-    setCreateForm({ prenom: '', nom: '', email: '', telephone: '', agence: '', role: 'agent', password: '' })
-    setCreateLoading(false)
-    setTimeout(() => setCreateSuccess(false), 4000)
-    loadData()
+  function openCreateAgence() {
+    setEditingAgence(null)
+    setAgenceForm({ nom: '', region: '', adresse: '', telephone: '', email: '', actif: true })
+    setShowAgenceModal(true)
+  }
+
+  function openEditAgence(agence: any) {
+    setEditingAgence(agence)
+    setAgenceForm({ nom: agence.nom, region: agence.region || '', adresse: agence.adresse || '', telephone: agence.telephone || '', email: agence.email || '', actif: agence.actif !== false })
+    setShowAgenceModal(true)
   }
 
   async function handleLogout() {
@@ -145,617 +243,716 @@ export default function DashboardAdmin() {
     router.push('/login')
   }
 
-  const filtered = agents.filter(a => {
-    const matchSearch = search === '' ||
-      `${a.prenom} ${a.nom} ${a.email}`.toLowerCase().includes(search.toLowerCase())
-    const matchRole = filterRole === 'tous' || a.role === filterRole
-    const matchStatut = filterStatut === 'tous' || a.statut === filterStatut
-    const matchAgence = filterAgence === 'tous' || a.agence_id === filterAgence
-    return matchSearch && matchRole && matchStatut && matchAgence
+  const filteredAgences = agences.filter(a => {
+    const matchSearch = agenceSearch === '' || `${a.nom} ${a.region || ''}`.toLowerCase().includes(agenceSearch.toLowerCase())
+    const matchFilter = agenceFilter === 'tous' || (agenceFilter === 'actif' ? a.actif !== false : a.actif === false)
+    return matchSearch && matchFilter
   })
 
-  const stats = {
-    total: agents.length,
-    actifs: agents.filter(a => a.statut === 'actif').length,
-    enAttente: agents.filter(a => a.statut === 'en_attente').length,
-    bloques: agents.filter(a => a.statut === 'bloque').length,
-  }
-
-  const roleLabel: Record<string, string> = {
-    agent: 'Agent', chef: 'Chef', responsable: 'Responsable', dg: 'DG', admin: 'Admin'
-  }
-  const statutColor: Record<string, { bg: string, color: string }> = {
-    actif: { bg: '#DCFCE7', color: '#166534' },
-    en_attente: { bg: '#FEF9C3', color: '#854D0E' },
-    bloque: { bg: '#FEE2E2', color: '#991B1B' },
-  }
+  const navItems = [
+    { key: 'dashboard', label: 'Dashboard', icon: '📊', active: true },
+    { key: 'agences', label: 'Agences', icon: '🏦', active: true },
+    { key: 'agents', label: 'Agents', icon: '👥', active: false },
+    { key: 'objectifs', label: 'Objectifs', icon: '🎯', active: false },
+    { key: 'fiches', label: 'Fiches', icon: '📋', active: false },
+    { key: 'alertes', label: 'Alertes', icon: '⚠️', active: false },
+    { key: 'parametres', label: 'Paramètres', icon: '⚙️', active: false },
+  ]
 
   if (loading) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#f8fafc' }}>
-      <div className="w-10 h-10 border-4 rounded-full animate-spin"
-        style={{ borderColor: '#2A4E94', borderTopColor: 'transparent' }} />
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#0f172a' }}>
+      <div className="text-center">
+        <div className="w-12 h-12 border-4 rounded-full animate-spin mx-auto mb-4"
+          style={{ borderColor: '#2A4E94', borderTopColor: 'transparent' }} />
+        <p className="text-sm" style={{ color: 'rgba(255,255,255,0.5)' }}>Chargement du back-office...</p>
+      </div>
     </div>
   )
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: '#f8fafc', fontFamily: 'var(--font-dm-sans)' }}>
+    <div className="min-h-screen flex" style={{ backgroundColor: '#f8fafc', fontFamily: 'var(--font-dm-sans)' }}>
 
-      {/* Header */}
-      <div style={{ backgroundColor: '#1a1a2e' }}>
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm"
-              style={{ backgroundColor: '#2A4E94', color: 'white' }}>P</div>
+      {/* ── SIDEBAR ── */}
+      <div className={`flex-shrink-0 transition-all duration-300 ${sidebarOpen ? 'w-56' : 'w-16'}`}
+        style={{ backgroundColor: '#0f172a', minHeight: '100vh', position: 'sticky', top: 0 }}>
+        {/* Logo */}
+        <div className="p-4 border-b flex items-center gap-3" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm flex-shrink-0"
+            style={{ backgroundColor: '#2A4E94', color: 'white' }}>P</div>
+          {sidebarOpen && (
             <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-white text-sm">PERCOM</span>
-                <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
-                  style={{ backgroundColor: '#E4322C', color: 'white' }}>
-                  Admin
-                </span>
-              </div>
-              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>Back-office</p>
+              <div className="text-white font-bold text-sm">PERCOM</div>
+              <div className="text-xs" style={{ color: '#E4322C', fontWeight: 600 }}>ADMIN</div>
             </div>
-          </div>
-          <button onClick={handleLogout}
-            className="text-xs px-3 py-2 rounded-lg"
-            style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: 'white' }}>
-            Déconnexion
-          </button>
+          )}
         </div>
 
-        {/* Tabs */}
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex gap-1">
-            {[
-              { key: 'overview', label: '📊 Vue d\'ensemble' },
-              { key: 'users', label: '👥 Utilisateurs' },
-              { key: 'create', label: '➕ Créer un compte' },
-            ].map(t => (
-              <button key={t.key} type="button"
-                onClick={() => setTab(t.key as Tab)}
-                className="px-4 py-3 text-xs font-medium border-b-2 transition-all"
-                style={{
-                  color: tab === t.key ? 'white' : 'rgba(255,255,255,0.45)',
-                  borderBottomColor: tab === t.key ? '#2A4E94' : 'transparent',
-                  backgroundColor: 'transparent',
-                }}>
-                {t.label}
-              </button>
-            ))}
-          </div>
+        {/* Nav */}
+        <nav className="p-2 space-y-1 mt-2">
+          {navItems.map(item => (
+            <button key={item.key} type="button"
+              onClick={() => item.active && setTab(item.key as Tab)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${!item.active ? 'opacity-30 cursor-not-allowed' : ''}`}
+              style={{
+                backgroundColor: tab === item.key ? '#2A4E94' : 'transparent',
+                color: tab === item.key ? 'white' : 'rgba(255,255,255,0.55)',
+              }}>
+              <span className="text-base flex-shrink-0">{item.icon}</span>
+              {sidebarOpen && (
+                <span className="text-xs">{item.label}</span>
+              )}
+              {sidebarOpen && !item.active && <span className="ml-auto text-xs opacity-50">Bientôt</span>}
+            </button>
+          ))}
+        </nav>
+
+        {/* Toggle sidebar */}
+        <div className="absolute bottom-4 left-0 right-0 flex justify-center">
+          <button type="button" onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="w-8 h-8 rounded-lg flex items-center justify-center"
+            style={{ backgroundColor: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.5)' }}>
+            {sidebarOpen ? '←' : '→'}
+          </button>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto p-4 md:p-6">
+      {/* ── MAIN CONTENT ── */}
+      <div className="flex-1 flex flex-col min-h-screen">
 
-        {/* ══ TAB : VUE D'ENSEMBLE ══ */}
-        {tab === 'overview' && (
-          <div className="space-y-6">
-            <h2 className="text-lg font-bold" style={{ color: '#1a1a2e' }}>
-              Vue d&apos;ensemble de la plateforme
-            </h2>
-
-            {/* Stats */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              {[
-                { label: 'Total utilisateurs', value: stats.total, icon: '👥', bg: '#EEF2FF', color: '#2A4E94' },
-                { label: 'Comptes actifs', value: stats.actifs, icon: '✅', bg: '#F0FDF4', color: '#166534' },
-                { label: 'En attente', value: stats.enAttente, icon: '⏳', bg: '#FEF9C3', color: '#854D0E' },
-                { label: 'Comptes bloqués', value: stats.bloques, icon: '🚫', bg: '#FEF2F2', color: '#991B1B' },
-              ].map(s => (
-                <div key={s.label} className="bg-white rounded-2xl p-5 border border-gray-100">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="text-xs mb-1" style={{ color: '#818387' }}>{s.label}</div>
-                      <div className="text-3xl font-bold" style={{ color: s.color }}>{s.value}</div>
-                    </div>
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
-                      style={{ backgroundColor: s.bg }}>{s.icon}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Répartition par rôle */}
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="bg-white rounded-2xl p-5 border border-gray-100">
-                <h3 className="font-semibold text-sm mb-4" style={{ color: '#1a1a2e' }}>
-                  Répartition par rôle
-                </h3>
-                <div className="space-y-3">
-                  {['agent', 'chef', 'responsable', 'dg', 'admin'].map(role => {
-                    const count = agents.filter(a => a.role === role).length
-                    const pct = stats.total > 0 ? Math.round((count / stats.total) * 100) : 0
-                    return (
-                      <div key={role}>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
-                            {roleLabel[role]}
-                          </span>
-                          <span className="text-xs" style={{ color: '#818387' }}>{count}</span>
-                        </div>
-                        <div className="w-full h-2 rounded-full" style={{ backgroundColor: '#f1f5f9' }}>
-                          <div className="h-2 rounded-full" style={{ width: `${pct}%`, backgroundColor: '#2A4E94' }} />
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
+        {/* Top bar */}
+        <div className="px-6 py-4 flex items-center justify-between border-b"
+          style={{ backgroundColor: 'white', borderColor: '#f1f5f9' }}>
+          <div>
+            <h1 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>
+              {tab === 'dashboard' && '📊 Dashboard Stratégique'}
+              {tab === 'agences' && '🏦 Gestion des Agences'}
+            </h1>
+            <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
+              PADES Microfinance — Back-office Super Admin
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            {stats.agentsEnAttente > 0 && (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+                style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
+                ⏳ {stats.agentsEnAttente} en attente
               </div>
-
-              <div className="bg-white rounded-2xl p-5 border border-gray-100">
-                <h3 className="font-semibold text-sm mb-4" style={{ color: '#1a1a2e' }}>
-                  Répartition par agence
-                </h3>
-                <div className="space-y-3">
-                  {agences.map(agence => {
-                    const count = agents.filter(a => a.agence_id === agence.id).length
-                    const pct = stats.total > 0 ? Math.round((count / stats.total) * 100) : 0
-                    return (
-                      <div key={agence.id}>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs font-medium" style={{ color: '#1a1a2e' }}>{agence.nom}</span>
-                          <span className="text-xs" style={{ color: '#818387' }}>{count}</span>
-                        </div>
-                        <div className="w-full h-2 rounded-full" style={{ backgroundColor: '#f1f5f9' }}>
-                          <div className="h-2 rounded-full" style={{ width: `${pct}%`, backgroundColor: '#E4322C' }} />
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
+            )}
+            <div className="text-xs px-3 py-1.5 rounded-lg"
+              style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+              {admin?.prenom} {admin?.nom}
             </div>
+            <button onClick={handleLogout} type="button"
+              className="text-xs px-3 py-1.5 rounded-lg font-medium"
+              style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+              Déconnexion
+            </button>
+          </div>
+        </div>
 
-            {/* Comptes en attente */}
-            {stats.enAttente > 0 && (
-              <div className="bg-white rounded-2xl p-5 border border-gray-100">
-                <h3 className="font-semibold text-sm mb-4 flex items-center gap-2" style={{ color: '#1a1a2e' }}>
-                  ⏳ Comptes en attente d&apos;activation
-                  <span className="text-xs px-2 py-0.5 rounded-full font-bold"
-                    style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
-                    {stats.enAttente}
-                  </span>
-                </h3>
-                <div className="space-y-3">
-                  {agents.filter(a => a.statut === 'en_attente').map(a => (
-                    <div key={a.id} className="flex items-center justify-between p-3 rounded-xl"
-                      style={{ backgroundColor: '#f8fafc' }}>
-                      <div>
-                        <div className="font-medium text-sm" style={{ color: '#1a1a2e' }}>
-                          {a.prenom} {a.nom}
-                        </div>
-                        <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
-                          {a.email} · {a.agences?.nom || 'Aucune agence'}
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => updateStatut(a.id, 'actif')}
-                          disabled={actionLoading === a.id + 'actif'}
-                          className="px-3 py-1.5 rounded-xl text-xs font-semibold text-white"
-                          style={{ backgroundColor: '#166534' }}>
-                          {actionLoading === a.id + 'actif' ? '...' : '✅ Activer'}
-                        </button>
-                        <button
-                          onClick={() => updateStatut(a.id, 'bloque')}
-                          disabled={actionLoading === a.id + 'bloque'}
-                          className="px-3 py-1.5 rounded-xl text-xs font-semibold text-white"
-                          style={{ backgroundColor: '#991B1B' }}>
-                          {actionLoading === a.id + 'bloque' ? '...' : '🚫 Refuser'}
-                        </button>
-                      </div>
+        <div className="flex-1 p-6 space-y-6">
+
+          {/* ════ DASHBOARD ════ */}
+          {tab === 'dashboard' && (
+            <>
+              {/* Alertes */}
+              {alertes.length > 0 && (
+                <div className="space-y-2">
+                  {alertes.map((a, i) => (
+                    <div key={i} className="flex items-center justify-between p-3 rounded-xl"
+                      style={{
+                        backgroundColor: a.type === 'error' ? '#FEF2F2' : a.type === 'warning' ? '#FEF9C3' : '#EEF2FF',
+                        border: `1px solid ${a.type === 'error' ? '#FECACA' : a.type === 'warning' ? '#FDE68A' : '#C7D2FE'}`
+                      }}>
+                      <span className="text-sm font-medium"
+                        style={{ color: a.type === 'error' ? '#991B1B' : a.type === 'warning' ? '#854D0E' : '#2A4E94' }}>
+                        {a.type === 'error' ? '🚨' : a.type === 'warning' ? '⚠️' : 'ℹ️'} {a.message}
+                      </span>
+                      <button type="button" onClick={() => setTab(a.action as Tab)}
+                        className="text-xs px-2 py-1 rounded-lg font-medium"
+                        style={{ backgroundColor: 'rgba(0,0,0,0.08)', color: '#1a1a2e' }}>
+                        Voir →
+                      </button>
                     </div>
                   ))}
                 </div>
+              )}
+
+              {/* Stats principales */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {[
+                  { label: 'Total agents', value: stats.totalAgents, icon: '👥', color: '#2A4E94', bg: '#EEF2FF', sub: 'Actifs sur la plateforme' },
+                  { label: 'Total agences', value: stats.totalAgences, icon: '🏦', color: '#166534', bg: '#F0FDF4', sub: 'Réseau PADES' },
+                  { label: "Collecté aujourd'hui", value: stats.collecteAujourdhui.toLocaleString() + ' F', icon: '💰', color: '#854D0E', bg: '#FEF9C3', sub: 'Toutes agences' },
+                  { label: 'Collecté ce mois', value: stats.collecteMois.toLocaleString() + ' F', icon: '📈', color: '#991B1B', bg: '#FEF2F2', sub: new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) },
+                ].map(s => (
+                  <div key={s.label} className="bg-white rounded-2xl p-5 border border-gray-100">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
+                        style={{ backgroundColor: s.bg }}>{s.icon}</div>
+                      <span className="text-xs px-2 py-0.5 rounded-full"
+                        style={{ backgroundColor: s.bg, color: s.color }}>Live</span>
+                    </div>
+                    <div className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</div>
+                    <div className="text-xs mt-1 font-medium" style={{ color: '#1a1a2e' }}>{s.label}</div>
+                    <div className="text-xs mt-0.5" style={{ color: '#818387' }}>{s.sub}</div>
+                  </div>
+                ))}
               </div>
-            )}
-          </div>
-        )}
 
-        {/* ══ TAB : UTILISATEURS ══ */}
-        {tab === 'users' && (
-          <div className="space-y-4">
-            <h2 className="text-lg font-bold" style={{ color: '#1a1a2e' }}>
-              Gestion des utilisateurs
-            </h2>
+              {/* Stats secondaires */}
+              <div className="grid grid-cols-3 gap-4">
+                {[
+                  { label: 'En attente activation', value: stats.agentsEnAttente, color: '#854D0E', bg: '#FEF9C3', icon: '⏳' },
+                  { label: 'Manquants non réglés', value: stats.manquantsTotal.toLocaleString() + ' FCFA', color: '#991B1B', bg: '#FEF2F2', icon: '🚨' },
+                  { label: 'Fiches non validées', value: stats.fichesNonValides, color: '#2A4E94', bg: '#EEF2FF', icon: '📋' },
+                ].map(s => (
+                  <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+                      style={{ backgroundColor: s.bg }}>{s.icon}</div>
+                    <div>
+                      <div className="font-bold text-lg" style={{ color: s.color }}>{s.value}</div>
+                      <div className="text-xs" style={{ color: '#818387' }}>{s.label}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
 
-            {/* Filtres */}
-            <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3">
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                  <svg className="w-4 h-4" style={{ color: '#818387' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                  </svg>
+              {/* Évolution + Top agents */}
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* Évolution mensuelle */}
+                <div className="bg-white rounded-2xl p-5 border border-gray-100">
+                  <h3 className="font-semibold text-sm mb-5" style={{ color: '#1a1a2e' }}>
+                    📈 Évolution des collectes (6 mois)
+                  </h3>
+                  <div className="flex items-end gap-2 h-32">
+                    {evolutionMensuelle.map((m, i) => (
+                      <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                        <div className="text-xs font-medium" style={{ color: '#2A4E94' }}>
+                          {m.total > 0 ? (m.total / 1000).toFixed(0) + 'k' : '0'}
+                        </div>
+                        <div className="w-full rounded-t-lg transition-all"
+                          style={{
+                            height: `${Math.max(4, m.pct)}%`,
+                            minHeight: '4px',
+                            backgroundColor: i === evolutionMensuelle.length - 1 ? '#2A4E94' : '#C7D2FE'
+                          }} />
+                        <div className="text-xs" style={{ color: '#818387' }}>{m.mois}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <input type="text" placeholder="Rechercher par nom, prénom, email..."
-                  value={search} onChange={e => setSearch(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 rounded-xl border text-sm outline-none"
-                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+
+                {/* Top 5 agents */}
+                <div className="bg-white rounded-2xl p-5 border border-gray-100">
+                  <h3 className="font-semibold text-sm mb-4" style={{ color: '#1a1a2e' }}>
+                    🏆 Top 5 agents du mois
+                  </h3>
+                  {topAgents.length === 0 ? (
+                    <div className="flex items-center justify-center h-24 text-sm" style={{ color: '#818387' }}>
+                      Aucune donnée ce mois
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {topAgents.map((a, i) => (
+                        <div key={a.id} className="flex items-center gap-3">
+                          <div className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold"
+                            style={{
+                              backgroundColor: i === 0 ? '#FEF9C3' : i === 1 ? '#F1F5F9' : '#FEF2F2',
+                              color: i === 0 ? '#854D0E' : i === 1 ? '#475569' : '#991B1B'
+                            }}>
+                            {i + 1}
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                              {a.prenom} {a.nom}
+                            </div>
+                            <div className="text-xs" style={{ color: '#818387' }}>
+                              {a.agences?.nom || '—'}
+                            </div>
+                          </div>
+                          <div className="text-xs font-bold" style={{ color: '#2A4E94' }}>
+                            {(a.montant || 0).toLocaleString()} F
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                <select value={filterStatut} onChange={e => setFilterStatut(e.target.value)}
-                  className="px-3 py-2 rounded-xl border text-xs outline-none"
+              {/* Performance par agence */}
+              <div className="bg-white rounded-2xl p-5 border border-gray-100">
+                <h3 className="font-semibold text-sm mb-4" style={{ color: '#1a1a2e' }}>
+                  🏦 Performance par agence (aujourd&apos;hui)
+                </h3>
+                <div className="space-y-3">
+                  {agencesStats.map(a => {
+                    const pct = Math.min(100, Math.round((a.collecte / 25000) * 100))
+                    return (
+                      <div key={a.nom}>
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-medium" style={{ color: '#1a1a2e' }}>{a.nom}</span>
+                            <span className="text-xs px-1.5 py-0.5 rounded"
+                              style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                              {a.nbAgents} agents
+                            </span>
+                          </div>
+                          <span className="text-xs font-bold" style={{ color: pct >= 100 ? '#166534' : pct >= 50 ? '#854D0E' : '#991B1B' }}>
+                            {a.collecte.toLocaleString()} FCFA
+                          </span>
+                        </div>
+                        <div className="w-full h-2 rounded-full" style={{ backgroundColor: '#f1f5f9' }}>
+                          <div className="h-2 rounded-full transition-all"
+                            style={{
+                              width: `${pct}%`,
+                              backgroundColor: pct >= 100 ? '#22C55E' : pct >= 50 ? '#EAB308' : '#EF4444'
+                            }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* ════ AGENCES ════ */}
+          {tab === 'agences' && (
+            <div className="space-y-4">
+              {/* Header + Actions */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+                    Toutes les agences
+                  </h2>
+                  <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
+                    {agences.length} agence(s) dans le réseau PADES
+                  </p>
+                </div>
+                <button type="button" onClick={openCreateAgence}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-sm font-semibold"
+                  style={{ backgroundColor: '#2A4E94' }}>
+                  ➕ Nouvelle agence
+                </button>
+              </div>
+
+              {/* Filtres */}
+              <div className="bg-white rounded-2xl p-4 border border-gray-100 flex flex-wrap gap-3">
+                <div className="relative flex-1 min-w-48">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <svg className="w-4 h-4" style={{ color: '#818387' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </div>
+                  <input type="text" placeholder="Rechercher une agence..."
+                    value={agenceSearch} onChange={e => setAgenceSearch(e.target.value)}
+                    className="w-full pl-9 pr-4 py-2 rounded-xl border text-sm outline-none"
+                    style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+                </div>
+                <select value={agenceFilter} onChange={e => setAgenceFilter(e.target.value)}
+                  className="px-3 py-2 rounded-xl border text-sm outline-none"
                   style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
                   <option value="tous">Tous les statuts</option>
-                  <option value="actif">Actif</option>
-                  <option value="en_attente">En attente</option>
-                  <option value="bloque">Bloqué</option>
+                  <option value="actif">Actives</option>
+                  <option value="inactif">Inactives</option>
                 </select>
-
-                <select value={filterRole} onChange={e => setFilterRole(e.target.value)}
-                  className="px-3 py-2 rounded-xl border text-xs outline-none"
-                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-                  <option value="tous">Tous les rôles</option>
-                  <option value="agent">Agent</option>
-                  <option value="chef">Chef</option>
-                  <option value="responsable">Responsable</option>
-                  <option value="dg">DG</option>
-                  <option value="admin">Admin</option>
-                </select>
-
-                <select value={filterAgence} onChange={e => setFilterAgence(e.target.value)}
-                  className="px-3 py-2 rounded-xl border text-xs outline-none"
-                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-                  <option value="tous">Toutes les agences</option>
-                  {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
-                </select>
-
-                <div className="text-xs flex items-center px-3" style={{ color: '#818387' }}>
-                  {filtered.length} résultat(s)
+                <div className="flex items-center text-xs px-3" style={{ color: '#818387' }}>
+                  {filteredAgences.length} résultat(s)
                 </div>
               </div>
-            </div>
 
-            {/* Table */}
-            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-              {filtered.length === 0 ? (
-                <div className="p-8 text-center">
-                  <div className="text-4xl mb-3">🔍</div>
-                  <div className="font-medium text-sm" style={{ color: '#1a1a2e' }}>Aucun utilisateur trouvé</div>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #f1f5f9' }}>
-                        {['Utilisateur', 'Rôle', 'Agence', 'Statut', 'Actions'].map(h => (
-                          <th key={h} className="text-left px-4 py-3 text-xs font-semibold"
-                            style={{ color: '#818387' }}>{h}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filtered.map((a, i) => (
-                        <tr key={a.id}
-                          style={{ borderBottom: i < filtered.length - 1 ? '1px solid #f8fafc' : 'none' }}>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white"
-                                style={{ backgroundColor: '#2A4E94' }}>
-                                {a.prenom?.[0]}{a.nom?.[0]}
-                              </div>
-                              <div>
-                                <div className="font-medium text-sm" style={{ color: '#1a1a2e' }}>
-                                  {a.prenom} {a.nom}
-                                </div>
-                                <div className="text-xs" style={{ color: '#818387' }}>{a.email}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="text-xs px-2 py-1 rounded-full font-medium"
-                              style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-                              {roleLabel[a.role] || a.role}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="text-xs" style={{ color: '#818387' }}>
-                              {a.agences?.nom || '—'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <span className="text-xs px-2 py-1 rounded-full font-medium"
-                              style={{
-                                backgroundColor: statutColor[a.statut]?.bg || '#f1f5f9',
-                                color: statutColor[a.statut]?.color || '#1a1a2e'
-                              }}>
-                              {a.statut === 'actif' ? '✅ Actif'
-                                : a.statut === 'en_attente' ? '⏳ En attente'
-                                  : '🚫 Bloqué'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-2">
-                              {/* Activer */}
-                              {a.statut !== 'actif' && (
-                                <button
-                                  onClick={() => updateStatut(a.id, 'actif')}
-                                  disabled={!!actionLoading}
-                                  className="p-1.5 rounded-lg text-xs font-medium"
-                                  style={{ backgroundColor: '#F0FDF4', color: '#166534' }}
-                                  title="Activer">
-                                  ✅
-                                </button>
-                              )}
-                              {/* Bloquer */}
-                              {a.statut !== 'bloque' && (
-                                <button
-                                  onClick={() => updateStatut(a.id, 'bloque')}
-                                  disabled={!!actionLoading}
-                                  className="p-1.5 rounded-lg text-xs font-medium"
-                                  style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}
-                                  title="Bloquer">
-                                  🚫
-                                </button>
-                              )}
-                              {/* Modifier */}
-                              <button
-                                onClick={() => { setEditingAgent({ ...a }); setShowEditModal(true) }}
-                                className="p-1.5 rounded-lg text-xs"
-                                style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}
-                                title="Modifier">
-                                ✏️
-                              </button>
-                              {/* Supprimer */}
-                              <button
-                                onClick={() => setShowDeleteConfirm(a.id)}
-                                className="p-1.5 rounded-lg text-xs"
-                                style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}
-                                title="Supprimer">
-                                🗑️
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+              {/* Tableau agences */}
+              <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                <table className="w-full">
+                  <thead>
+                    <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #f1f5f9' }}>
+                      {['Agence', 'Région', 'Contact', 'Agents', 'Collecté aujourd\'hui', 'Statut', 'Actions'].map(h => (
+                        <th key={h} className="text-left px-4 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
                       ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredAgences.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="px-4 py-10 text-center">
+                          <div className="text-3xl mb-2">🏦</div>
+                          <div className="text-sm" style={{ color: '#818387' }}>Aucune agence trouvée</div>
+                        </td>
+                      </tr>
+                    ) : filteredAgences.map((a, i) => (
+                      <tr key={a.id} style={{ borderBottom: i < filteredAgences.length - 1 ? '1px solid #f8fafc' : 'none' }}>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm text-white"
+                              style={{ backgroundColor: '#2A4E94' }}>
+                              {a.nom?.[0]}
+                            </div>
+                            <div>
+                              <div className="font-semibold text-sm" style={{ color: '#1a1a2e' }}>{a.nom}</div>
+                              <div className="text-xs" style={{ color: '#818387' }}>{a.adresse || '—'}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-sm" style={{ color: '#818387' }}>{a.region || '—'}</td>
+                        <td className="px-4 py-3">
+                          <div className="text-xs" style={{ color: '#1a1a2e' }}>{a.telephone || '—'}</div>
+                          <div className="text-xs" style={{ color: '#818387' }}>{a.email || '—'}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="text-sm font-bold" style={{ color: '#2A4E94' }}>{a.nbAgents}</span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="text-sm font-semibold" style={{ color: a.collecteJour > 0 ? '#166534' : '#818387' }}>
+                            {a.collecteJour > 0 ? a.collecteJour.toLocaleString() + ' FCFA' : '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="text-xs px-2 py-1 rounded-full font-medium"
+                            style={{
+                              backgroundColor: a.actif !== false ? '#DCFCE7' : '#FEE2E2',
+                              color: a.actif !== false ? '#166534' : '#991B1B'
+                            }}>
+                            {a.actif !== false ? '✅ Active' : '⏸ Inactive'}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <button type="button" onClick={() => loadZones(a)}
+                              className="p-1.5 rounded-lg" title="Gérer les zones"
+                              style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>🗺️</button>
+                            <button type="button" onClick={() => openEditAgence(a)}
+                              className="p-1.5 rounded-lg" title="Modifier"
+                              style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>✏️</button>
+                            <button type="button" onClick={() => toggleAgence(a.id, a.actif === false)}
+                              className="p-1.5 rounded-lg" title={a.actif !== false ? 'Désactiver' : 'Activer'}
+                              style={{ backgroundColor: a.actif !== false ? '#FEF9C3' : '#F0FDF4', color: a.actif !== false ? '#854D0E' : '#166534' }}>
+                              {a.actif !== false ? '⏸' : '▶️'}
+                            </button>
+                            <button type="button" onClick={() => setDeleteAgenceConfirm(a.id)}
+                              className="p-1.5 rounded-lg" title="Supprimer"
+                              style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>🗑️</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Cards stats agences */}
+              <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {agences.map(a => (
+                  <div key={a.id} className="bg-white rounded-2xl p-4 border border-gray-100">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs text-white"
+                        style={{ backgroundColor: '#2A4E94' }}>{a.nom?.[0]}</div>
+                      <span className="text-xs px-2 py-0.5 rounded-full"
+                        style={{
+                          backgroundColor: a.actif !== false ? '#DCFCE7' : '#FEE2E2',
+                          color: a.actif !== false ? '#166534' : '#991B1B'
+                        }}>
+                        {a.actif !== false ? 'Active' : 'Inactive'}
+                      </span>
+                    </div>
+                      <div className="font-bold text-sm mb-3" style={{ color: '#1a1a2e' }}>{a.nom}</div>
+                      <div className="space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span style={{ color: '#818387' }}>Agents</span>
+                        <span className="font-semibold" style={{ color: '#2A4E94' }}>{a.nbAgents}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span style={{ color: '#818387' }}>Zones</span>
+                        <span className="font-semibold" style={{ color: '#2A4E94' }}>{a.nbZones ?? '—'}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span style={{ color: '#818387' }}>Collecté/jour</span>
+                        <span className="font-semibold" style={{ color: '#166534' }}>{a.collecteJour.toLocaleString()} F</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span style={{ color: '#818387' }}>Région</span>
+                        <span style={{ color: '#1a1a2e' }}>{a.region || '—'}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+                          {/* Panneau zones */}
+{selectedAgenceZones && (
+  <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+    <div className="px-5 py-4 border-b flex items-center justify-between"
+      style={{ borderColor: '#f1f5f9' }}>
+      <div>
+        <h3 className="font-bold text-sm" style={{ color: '#1a1a2e' }}>
+          🗺️ Zones de l&apos;agence — {selectedAgenceZones.nom}
+        </h3>
+        <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
+          {zones.length} zone(s) configurée(s)
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <button type="button" onClick={openCreateZone}
+          className="px-3 py-2 rounded-xl text-xs font-semibold text-white"
+          style={{ backgroundColor: '#2A4E94' }}>
+          ➕ Ajouter une zone
+        </button>
+        <button type="button" onClick={() => setSelectedAgenceZones(null)}
+          className="px-3 py-2 rounded-xl text-xs font-semibold"
+          style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>
+          ✕ Fermer
+        </button>
+      </div>
+    </div>
+
+    {zones.length === 0 ? (
+      <div className="p-8 text-center">
+        <div className="text-3xl mb-2">🗺️</div>
+        <div className="text-sm font-medium" style={{ color: '#1a1a2e' }}>
+          Aucune zone configurée
+        </div>
+        <div className="text-xs mt-1" style={{ color: '#818387' }}>
+          Ajoutez des zones pour organiser les agents de cette agence
+        </div>
+      </div>
+    ) : (
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4">
+        {zones.map(z => (
+          <div key={z.id} className="rounded-xl p-4 border"
+            style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
+            <div className="flex items-start justify-between mb-2">
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm text-white"
+                style={{ backgroundColor: '#2A4E94' }}>
+                {z.numero}
+              </div>
+              <div className="flex gap-1">
+                <button type="button" onClick={() => openEditZone(z)}
+                  className="p-1 rounded-lg text-xs"
+                  style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>✏️</button>
+                <button type="button" onClick={() => setDeleteZoneConfirm(z.id)}
+                  className="p-1 rounded-lg text-xs"
+                  style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>🗑️</button>
+              </div>
+            </div>
+            <div className="font-semibold text-sm" style={{ color: '#1a1a2e' }}>
+              Zone {z.numero}
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
+              {z.nom || selectedAgenceZones.nom}
             </div>
           </div>
-        )}
+        ))}
+      </div>
+    )}
+  </div>
+)}
 
-        {/* ══ TAB : CRÉER UN COMPTE ══ */}
-        {tab === 'create' && (
-          <div className="max-w-2xl space-y-4">
-            <h2 className="text-lg font-bold" style={{ color: '#1a1a2e' }}>
-              Créer un compte utilisateur
-            </h2>
 
-            <div className="bg-white rounded-2xl p-6 border border-gray-100">
-              {createSuccess && (
-                <div className="mb-4 p-4 rounded-xl flex items-center gap-3"
-                  style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
-                  <span className="text-xl">✅</span>
-                  <div>
-                    <div className="font-semibold text-sm">Compte créé avec succès !</div>
-                    <div className="text-xs mt-0.5">Le compte est actif et l&apos;utilisateur peut se connecter.</div>
-                  </div>
-                </div>
-              )}
-
-              {createError && (
-                <div className="mb-4 p-4 rounded-xl text-sm"
-                  style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
-                  ❌ {createError}
-                </div>
-              )}
-
-              <form onSubmit={handleCreate} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <AdminField label="Prénom" type="text"
-                    value={createForm.prenom}
-                    onChange={v => setCreateForm(p => ({ ...p, prenom: v }))}
-                    placeholder="Jean" required />
-                  <AdminField label="Nom" type="text"
-                    value={createForm.nom}
-                    onChange={v => setCreateForm(p => ({ ...p, nom: v }))}
-                    placeholder="Kodjo" required />
-                </div>
-
-                <AdminField label="Email" type="email"
-                  value={createForm.email}
-                  onChange={v => setCreateForm(p => ({ ...p, email: v }))}
-                  placeholder="agent@pades.tg" required />
-
-                <AdminField label="Téléphone" type="tel"
-                  value={createForm.telephone}
-                  onChange={v => setCreateForm(p => ({ ...p, telephone: v }))}
-                  placeholder="+228 9X XX XX XX" />
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
-                      Rôle
-                    </label>
-                    <select value={createForm.role}
-                      onChange={e => setCreateForm(p => ({ ...p, role: e.target.value }))}
-                      className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
-                      style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} required>
-                      <option value="agent">Agent</option>
-                      <option value="chef">Chef d&apos;équipe</option>
-                      <option value="responsable">Responsable agence</option>
-                      <option value="dg">Direction Générale</option>
-                      <option value="admin">Administrateur</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
-                      Agence
-                    </label>
-                    <select value={createForm.agence}
-                      onChange={e => setCreateForm(p => ({ ...p, agence: e.target.value }))}
-                      className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
-                      style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-                      <option value="">Aucune agence</option>
-                      {agences.map(a => <option key={a.id} value={a.nom}>{a.nom}</option>)}
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
-                    Mot de passe temporaire
-                  </label>
-                  <input type="text"
-                    value={createForm.password}
-                    onChange={e => setCreateForm(p => ({ ...p, password: e.target.value }))}
-                    className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
-                    style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}
-                    placeholder="Min. 8 caractères" required minLength={8} />
-                  <p className="text-xs mt-1" style={{ color: '#818387' }}>
-                    L&apos;utilisateur pourra changer son mot de passe depuis ses paramètres.
-                  </p>
-                </div>
-
-                <div className="rounded-xl p-4" style={{ backgroundColor: '#EEF2FF' }}>
-                  <p className="text-xs" style={{ color: '#2A4E94' }}>
-                    ℹ️ Le compte créé par l&apos;admin est immédiatement actif.
-                    L&apos;utilisateur peut se connecter dès maintenant avec les identifiants fournis.
-                  </p>
-                </div>
-
-                <button type="submit" disabled={createLoading}
-                  className="w-full py-3.5 rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2"
-                  style={{ backgroundColor: createLoading ? '#818387' : '#2A4E94' }}>
-                  {createLoading ? (
-                    <>
-                      <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      Création en cours...
-                    </>
-                  ) : '➕ Créer le compte'}
-                </button>
-              </form>
             </div>
-          </div>
-        )}
+
+
+          )}
+
+          {/* Sections à venir */}
+          {!['dashboard', 'agences'].includes(tab) && (
+            <div className="flex items-center justify-center h-64">
+              <div className="text-center">
+                <div className="text-5xl mb-4">🚧</div>
+                <div className="font-semibold text-lg" style={{ color: '#1a1a2e' }}>Module en développement</div>
+                <div className="text-sm mt-2" style={{ color: '#818387' }}>Cette section sera disponible prochainement</div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* ══ MODAL MODIFICATION ══ */}
-      {showEditModal && editingAgent && (
+      {/* ── MODAL AGENCE ── */}
+      {showAgenceModal && (
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+          style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl">
             <h3 className="font-bold text-lg mb-5" style={{ color: '#1a1a2e' }}>
-              ✏️ Modifier {editingAgent.prenom} {editingAgent.nom}
+              {editingAgence ? '✏️ Modifier l\'agence' : '➕ Nouvelle agence'}
             </h3>
-
-            <div className="space-y-4">
+            <form onSubmit={saveAgence} className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <AdminField label="Prénom" type="text"
-                  value={editingAgent.prenom}
-                  onChange={v => setEditingAgent(p => p ? { ...p, prenom: v } : p)}
-                  placeholder="Prénom" />
-                <AdminField label="Nom" type="text"
-                  value={editingAgent.nom}
-                  onChange={v => setEditingAgent(p => p ? { ...p, nom: v } : p)}
-                  placeholder="Nom" />
+                <div>
+                  <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Nom de l&apos;agence *</label>
+                  <input type="text" value={agenceForm.nom}
+                    onChange={e => setAgenceForm(p => ({ ...p, nom: e.target.value }))}
+                    className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                    style={{ borderColor: '#e2e8f0' }} placeholder="Agence Sagbado" required />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Région</label>
+                  <input type="text" value={agenceForm.region}
+                    onChange={e => setAgenceForm(p => ({ ...p, region: e.target.value }))}
+                    className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                    style={{ borderColor: '#e2e8f0' }} placeholder="Lomé" />
+                </div>
               </div>
-
-              <AdminField label="Téléphone" type="tel"
-                value={editingAgent.telephone || ''}
-                onChange={v => setEditingAgent(p => p ? { ...p, telephone: v } : p)}
-                placeholder="+228 9X XX XX XX" />
-
               <div>
-                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Rôle</label>
-                <select value={editingAgent.role}
-                  onChange={e => setEditingAgent(p => p ? { ...p, role: e.target.value } : p)}
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Adresse</label>
+                <input type="text" value={agenceForm.adresse}
+                  onChange={e => setAgenceForm(p => ({ ...p, adresse: e.target.value }))}
                   className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
-                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-                  <option value="agent">Agent</option>
-                  <option value="chef">Chef d&apos;équipe</option>
-                  <option value="responsable">Responsable agence</option>
-                  <option value="dg">Direction Générale</option>
-                  <option value="admin">Administrateur</option>
-                </select>
+                  style={{ borderColor: '#e2e8f0' }} placeholder="34, rue du Chemin de Fer..." />
               </div>
-
-              <div>
-                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Agence</label>
-                <select value={editingAgent.agence_id || ''}
-                  onChange={e => setEditingAgent(p => p ? { ...p, agence_id: e.target.value } : p)}
-                  className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
-                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-                  <option value="">Aucune agence</option>
-                  {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
-                </select>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Téléphone</label>
+                  <input type="tel" value={agenceForm.telephone}
+                    onChange={e => setAgenceForm(p => ({ ...p, telephone: e.target.value }))}
+                    className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                    style={{ borderColor: '#e2e8f0' }} placeholder="+228 70 35 37 XX" />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Email</label>
+                  <input type="email" value={agenceForm.email}
+                    onChange={e => setAgenceForm(p => ({ ...p, email: e.target.value }))}
+                    className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                    style={{ borderColor: '#e2e8f0' }} placeholder="agence@pades.tg" />
+                </div>
               </div>
-            </div>
-
-            <div className="flex gap-3 mt-6">
-              <button type="button"
-                onClick={() => { setShowEditModal(false); setEditingAgent(null) }}
-                className="flex-1 py-3 rounded-xl text-sm font-semibold border"
-                style={{ borderColor: '#e2e8f0', color: '#818387' }}>
-                Annuler
-              </button>
-              <button type="button"
-                onClick={saveEdit}
-                disabled={actionLoading === 'edit'}
-                className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
-                style={{ backgroundColor: '#2A4E94' }}>
-                {actionLoading === 'edit' ? 'Sauvegarde...' : 'Enregistrer'}
-              </button>
-            </div>
+              <div className="flex items-center gap-3">
+                <label className="text-xs font-semibold" style={{ color: '#1a1a2e' }}>Statut</label>
+                <button type="button" onClick={() => setAgenceForm(p => ({ ...p, actif: !p.actif }))}
+                  className="relative w-10 h-6 rounded-full transition-all"
+                  style={{ backgroundColor: agenceForm.actif ? '#2A4E94' : '#e2e8f0' }}>
+                  <div className="absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm"
+                    style={{ left: agenceForm.actif ? '22px' : '2px' }} />
+                </button>
+                <span className="text-xs" style={{ color: '#818387' }}>{agenceForm.actif ? 'Active' : 'Inactive'}</span>
+              </div>
+              <div className="flex gap-3 mt-6">
+                <button type="button"
+                  onClick={() => { setShowAgenceModal(false); setEditingAgence(null) }}
+                  className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+                  style={{ borderColor: '#e2e8f0', color: '#818387' }}>
+                  Annuler
+                </button>
+                <button type="submit" disabled={agenceLoading}
+                  className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+                  style={{ backgroundColor: agenceLoading ? '#818387' : '#2A4E94' }}>
+                  {agenceLoading ? 'Sauvegarde...' : editingAgence ? 'Enregistrer' : 'Créer l\'agence'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
 
-      {/* ══ MODAL SUPPRESSION ══ */}
-      {showDeleteConfirm && (
+
+
+      {/* ── MODAL SUPPRESSION AGENCE ── */}
+      {deleteAgenceConfirm && (
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
-          style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl text-center">
-            <div className="text-4xl mb-4">🗑️</div>
-            <h3 className="font-bold text-lg mb-2" style={{ color: '#1a1a2e' }}>
-              Confirmer la suppression
-            </h3>
+          style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center">
+            <div className="text-5xl mb-4">🏦</div>
+            <h3 className="font-bold text-lg mb-2" style={{ color: '#1a1a2e' }}>Supprimer cette agence ?</h3>
             <p className="text-sm mb-6" style={{ color: '#818387' }}>
-              Cette action est irréversible. Le compte sera définitivement supprimé.
+              Cette action est irréversible. Tous les agents et données liés à cette agence seront affectés.
             </p>
             <div className="flex gap-3">
-              <button type="button"
-                onClick={() => setShowDeleteConfirm(null)}
+              <button type="button" onClick={() => setDeleteAgenceConfirm(null)}
                 className="flex-1 py-3 rounded-xl text-sm font-semibold border"
-                style={{ borderColor: '#e2e8f0', color: '#818387' }}>
-                Annuler
-              </button>
-              <button type="button"
-                onClick={() => deleteAgent(showDeleteConfirm)}
-                disabled={!!actionLoading}
+                style={{ borderColor: '#e2e8f0', color: '#818387' }}>Annuler</button>
+              <button type="button" onClick={() => deleteAgence(deleteAgenceConfirm)}
                 className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
-                style={{ backgroundColor: '#E4322C' }}>
-                {actionLoading ? '...' : 'Supprimer'}
-              </button>
+                style={{ backgroundColor: '#E4322C' }}>Supprimer</button>
             </div>
           </div>
         </div>
       )}
-    </div>
-  )
-}
 
-function AdminField({ label, type, value, onChange, placeholder, required }: {
-  label: string, type: string, value: string,
-  onChange: (v: string) => void, placeholder: string, required?: boolean
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>{label}</label>
-      <input type={type} value={value} onChange={e => onChange(e.target.value)}
-        className="w-full px-4 py-3 rounded-xl border text-sm outline-none transition-all"
-        style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}
-        onFocus={e => e.target.style.borderColor = '#2A4E94'}
-        onBlur={e => e.target.style.borderColor = '#e2e8f0'}
-        placeholder={placeholder} required={required} />
+      {/* MODAL ZONE */}
+{showZoneModal && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+      <h3 className="font-bold text-lg mb-5" style={{ color: '#1a1a2e' }}>
+        {editingZone ? '✏️ Modifier la zone' : '➕ Nouvelle zone'}
+        <span className="text-sm font-normal ml-2" style={{ color: '#818387' }}>
+          — {selectedAgenceZones?.nom}
+        </span>
+      </h3>
+      <form onSubmit={saveZone} className="space-y-4">
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+            Numéro de zone *
+          </label>
+          <input type="number" min="1" value={zoneForm.numero}
+            onChange={e => setZoneForm(p => ({ ...p, numero: e.target.value }))}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+            style={{ borderColor: '#e2e8f0' }}
+            placeholder="1" required />
+          <p className="text-xs mt-1" style={{ color: '#818387' }}>
+            Zone {zoneForm.numero || '?'} de {selectedAgenceZones?.nom} sera unique
+          </p>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+            Nom / Description (optionnel)
+          </label>
+          <input type="text" value={zoneForm.nom}
+            onChange={e => setZoneForm(p => ({ ...p, nom: e.target.value }))}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+            style={{ borderColor: '#e2e8f0' }}
+            placeholder="Ex: Quartier Bé, Centre-ville..." />
+        </div>
+        <div className="rounded-xl p-3" style={{ backgroundColor: '#EEF2FF' }}>
+          <p className="text-xs" style={{ color: '#2A4E94' }}>
+            ℹ️ La Zone {zoneForm.numero || '?'} de {selectedAgenceZones?.nom} est distincte
+            de la Zone {zoneForm.numero || '?'} de toute autre agence.
+          </p>
+        </div>
+        <div className="flex gap-3 mt-4">
+          <button type="button"
+            onClick={() => { setShowZoneModal(false); setEditingZone(null) }}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+            style={{ borderColor: '#e2e8f0', color: '#818387' }}>
+            Annuler
+          </button>
+          <button type="submit" disabled={zoneLoading}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+            style={{ backgroundColor: zoneLoading ? '#818387' : '#2A4E94' }}>
+            {zoneLoading ? 'Sauvegarde...' : editingZone ? 'Enregistrer' : 'Créer la zone'}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+)}
+
+{/* MODAL SUPPRESSION ZONE */}
+{deleteZoneConfirm && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center">
+      <div className="text-4xl mb-4">🗺️</div>
+      <h3 className="font-bold text-lg mb-2" style={{ color: '#1a1a2e' }}>
+        Supprimer cette zone ?
+      </h3>
+      <p className="text-sm mb-6" style={{ color: '#818387' }}>
+        Les agents et équipes affectés à cette zone devront être réaffectés.
+      </p>
+      <div className="flex gap-3">
+        <button type="button" onClick={() => setDeleteZoneConfirm(null)}
+          className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+          style={{ borderColor: '#e2e8f0', color: '#818387' }}>
+          Annuler
+        </button>
+        <button type="button" onClick={() => deleteZone(deleteZoneConfirm)}
+          className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+          style={{ backgroundColor: '#E4322C' }}>
+          Supprimer
+        </button>
+      </div>
+    </div>
+  </div>
+)}
     </div>
   )
 }
