@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 
-type Mode = 'login' | 'register' | 'pending' | 'blocked'
+type Mode = 'login' | 'register' | 'pending' | 'blocked' | 'forgot' | 'forgot_sent'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -63,10 +63,11 @@ export default function LoginPage() {
       return
     }
 
-    if (agent.role === 'dg') router.push('/dashboard/dg')
-    else if (agent.role === 'responsable') router.push('/dashboard/responsable')
-    else if (agent.role === 'chef') router.push('/dashboard/chef')
-    else router.push('/dashboard/agent')
+    if (agent.role === 'admin') router.push('/dashboard/admin')
+      else if (agent.role === 'dg') router.push('/dashboard/dg')
+      else if (agent.role === 'responsable') router.push('/dashboard/responsable')
+      else if (agent.role === 'chef') router.push('/dashboard/chef')
+      else router.push('/dashboard/agent')
   }
 
   async function handleRegister(e: React.FormEvent) {
@@ -122,6 +123,26 @@ export default function LoginPage() {
 
     await supabase.auth.signOut()
     setMode('pending')
+    setLoading(false)
+  }
+
+  async function handleForgot(e: React.FormEvent) {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+  
+    const { error } = await supabase.auth.resetPasswordForEmail(
+      loginForm.email,
+      { redirectTo: `${window.location.origin}/reset-password` }
+    )
+  
+    if (error) {
+      setError(error.message)
+      setLoading(false)
+      return
+    }
+  
+    setMode('forgot_sent')
     setLoading(false)
   }
 
@@ -199,6 +220,58 @@ export default function LoginPage() {
     )
   }
 
+  if (mode === 'forgot') return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6"
+      style={{ fontFamily: 'var(--font-dm-sans)' }}>
+      <div className="bg-white rounded-3xl p-8 w-full max-w-md border border-gray-100 shadow-sm">
+        <div className="flex items-center gap-3 mb-8">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white"
+            style={{ backgroundColor: '#2A4E94' }}>P</div>
+          <div>
+            <div className="font-bold" style={{ color: '#2A4E94' }}>PADES</div>
+            <div className="text-xs font-semibold" style={{ color: '#E4322C' }}>MICROFINANCE</div>
+          </div>
+        </div>
+        <h2 className="text-2xl font-bold mb-2" style={{ color: '#1a1a2e' }}>
+          Mot de passe oublié 🔑
+        </h2>
+        <p className="text-sm mb-6" style={{ color: '#818387' }}>
+          Entrez votre email pour recevoir un lien de réinitialisation.
+        </p>
+        <form onSubmit={handleForgot} className="space-y-4">
+          <InputField label="Adresse email" type="email" value={loginForm.email}
+            onChange={v => setLoginForm(p => ({ ...p, email: v }))}
+            placeholder="votre@email.com" icon="email" required />
+          {error && <ErrorBox message={error} />}
+          <SubmitButton loading={loading} label="Envoyer le lien" />
+        </form>
+        <button type="button" onClick={() => { setMode('login'); setError('') }}
+          className="w-full mt-4 py-3 rounded-xl text-sm font-medium"
+          style={{ color: '#818387', backgroundColor: '#f8fafc' }}>
+          ← Retour à la connexion
+        </button>
+      </div>
+    </div>
+  )
+  
+  if (mode === 'forgot_sent') return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6"
+      style={{ fontFamily: 'var(--font-dm-sans)' }}>
+      <div className="bg-white rounded-3xl p-10 w-full max-w-md border border-gray-100 shadow-sm text-center">
+        <div className="text-5xl mb-4">📧</div>
+        <h2 className="text-2xl font-bold mb-3" style={{ color: '#1a1a2e' }}>Email envoyé !</h2>
+        <p className="text-sm mb-6" style={{ color: '#818387' }}>
+          Un lien de réinitialisation a été envoyé à <strong>{loginForm.email}</strong>.
+          Vérifiez votre boîte mail et vos spams.
+        </p>
+        <button type="button" onClick={() => { setMode('login'); setError('') }}
+          className="w-full py-3 rounded-xl text-white text-sm font-semibold"
+          style={{ backgroundColor: '#2A4E94' }}>
+          Retour à la connexion
+        </button>
+      </div>
+    </div>
+  )
   return (
     <div className="min-h-screen flex" style={{ fontFamily: 'var(--font-dm-sans)' }}>
 
@@ -330,7 +403,14 @@ export default function LoginPage() {
                     </button>
                   </div>
                 </div>
-
+                <div className="flex justify-end">
+              <button type="button"
+                onClick={() => { setMode('forgot'); setError('') }}
+                className="text-xs font-medium"
+                style={{ color: '#2A4E94' }}>
+                Mot de passe oublié ?
+              </button>
+            </div>
                 {error && <ErrorBox message={error} />}
                 <SubmitButton loading={loading} label="Se connecter" />
               </form>
