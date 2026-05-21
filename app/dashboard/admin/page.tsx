@@ -101,6 +101,15 @@ const [ficheFilterManquant, setFicheFilterManquant] = useState('tous')
 const [selectedFiche, setSelectedFiche] = useState<any>(null)
 const [deleteFicheConfirm, setDeleteFicheConfirm] = useState<string | null>(null)
 
+// Alertes
+const [alertesData, setAlertesData] = useState<any[]>([])
+const [alertesLoading, setAlertesLoading] = useState(false)
+
+// Paramètres
+const [adminForm, setAdminForm] = useState({ nom: '', prenom: '', telephone: '' })
+const [adminSaving, setAdminSaving] = useState(false)
+const [adminSuccess, setAdminSuccess] = useState(false)
+
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
 
@@ -108,8 +117,54 @@ const [deleteFicheConfirm, setDeleteFicheConfirm] = useState<string | null>(null
     if (tab === 'agents') loadAgentsData()
     if (tab === 'objectifs') loadObjectifs()
     if (tab === 'fiches') loadFiches()
+    if (tab === 'alertes') loadAlertes()
+    if (tab === 'parametres') setAdminForm({
+      nom: admin?.nom || '',
+      prenom: admin?.prenom || '',
+      telephone: admin?.telephone || '',
+    })
   }, [tab])
   useEffect(() => { loadAll() }, [])
+
+  useEffect(() => {
+    const channel = supabase
+      .channel('realtime-admin')
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'fiches_journalieres' },
+        () => {
+          loadStats()
+          loadFiches()
+        }
+      )
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'agents' },
+        () => {
+          loadStats()
+          loadAgentsData()
+          loadAgences()
+        }
+      )
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'agences' },
+        () => {
+          loadAgences()
+          loadStats()
+        }
+      )
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'objectifs' },
+        () => {
+          loadObjectifs()
+        }
+      )
+      .subscribe((status) => {
+        console.log('Realtime status:', status)
+      })
+  
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [])
 
   async function loadAll() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -495,6 +550,99 @@ const [deleteFicheConfirm, setDeleteFicheConfirm] = useState<string | null>(null
     setDeleteFicheConfirm(null)
   }
 
+  async function loadAlertes() {
+    setAlertesLoading(true)
+  
+    const [
+      { data: manquants },
+      { data: agentsInactifs },
+      { data: fichesNonValidees },
+      { count: enAttente },
+    ] = await Promise.all([
+      supabase.from('fiches_journalieres')
+        .select('*, agents!inner(nom, prenom, agences(nom))')
+        .eq('manquant_regle', false),
+      supabase.from('agents')
+        .select('*, agences(nom)')
+        .neq('role', 'admin')
+        .eq('statut', 'actif'),
+      supabase.from('fiches_journalieres')
+        .select('*, agents!inner(nom, prenom, agences(nom))')
+        .eq('valide_chef', false)
+        .lt('date', today),
+      supabase.from('agents')
+        .select('*', { count: 'exact', head: true })
+        .eq('statut', 'en_attente'),
+    ])
+  
+    const liste: any[] = []
+  
+    // Manquants non réglés
+    const manquantsReels = (manquants || []).filter(f =>
+      Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0
+    )
+    manquantsReels.forEach(f => {
+      const montant = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+      liste.push({
+        type: 'error',
+        categorie: 'Manquant',
+        message: `Manquant de ${montant.toLocaleString()} FCFA non réglé`,
+        detail: `${f.agents?.prenom} ${f.agents?.nom} — ${f.agents?.agences?.nom || '—'} — Fiche du ${new Date(f.date).toLocaleDateString('fr-FR')}`,
+        date: f.date,
+        action: 'fiches',
+        id: f.id,
+      })
+    })
+  
+    // Fiches non validées (jours passés)
+    ;(fichesNonValidees || []).forEach(f => {
+      liste.push({
+        type: 'warning',
+        categorie: 'Validation',
+        message: `Fiche non validée`,
+        detail: `${f.agents?.prenom} ${f.agents?.nom} — ${f.agents?.agences?.nom || '—'} — ${new Date(f.date).toLocaleDateString('fr-FR')}`,
+        date: f.date,
+        action: 'fiches',
+        id: f.id,
+      })
+    })
+  
+    // Comptes en attente
+    if ((enAttente || 0) > 0) {
+      liste.push({
+        type: 'info',
+        categorie: 'Compte',
+        message: `${enAttente} compte(s) en attente d'activation`,
+        detail: 'Des agents ont créé un compte et attendent votre validation',
+        date: today,
+        action: 'agents',
+        id: 'pending',
+      })
+    }
+  
+    // Trier par sévérité
+    const ordre = { error: 0, warning: 1, info: 2 }
+    liste.sort((a, b) => ordre[a.type as keyof typeof ordre] - ordre[b.type as keyof typeof ordre])
+  
+    setAlertesData(liste)
+    setAlertesLoading(false)
+  }
+  
+  async function saveAdminProfile(e: React.FormEvent) {
+    e.preventDefault()
+    if (!admin) return
+    setAdminSaving(true)
+    await supabase.from('agents').update({
+      nom: adminForm.nom,
+      prenom: adminForm.prenom,
+      telephone: adminForm.telephone,
+    }).eq('id', admin.id)
+    setAdmin((p: any) => ({ ...p, ...adminForm }))
+    setAdminSaving(false)
+    setAdminSuccess(true)
+    setTimeout(() => setAdminSuccess(false), 3000)
+  }
+
   function openCreateAgence() {
     setEditingAgence(null)
     setAgenceForm({ nom: '', region: '', adresse: '', telephone: '', email: '', actif: true })
@@ -524,8 +672,8 @@ const [deleteFicheConfirm, setDeleteFicheConfirm] = useState<string | null>(null
     { key: 'agents', label: 'Agents', icon: '👥', active: true },
     { key: 'objectifs', label: 'Objectifs', icon: '🎯', active: true },
     { key: 'fiches', label: 'Fiches', icon: '📋', active: true },
-    { key: 'alertes', label: 'Alertes', icon: '⚠️', active: false },
-    { key: 'parametres', label: 'Paramètres', icon: '⚙️', active: false },
+    { key: 'alertes', label: 'Alertes', icon: '⚠️', active: true },
+    { key: 'parametres', label: 'Paramètres', icon: '⚙️', active: true },
   ]
 
   if (loading) return (
@@ -597,7 +745,9 @@ const [deleteFicheConfirm, setDeleteFicheConfirm] = useState<string | null>(null
               {tab === 'agences' && '🏦 Gestion des Agences'}
               {tab === 'agents' && '👥 Gestion des Agents'}
               {tab === 'objectifs' && '🎯 Gestion des Objectifs'}
-              {tab === 'fiches' && '📋 Gestion des Fiches'}
+              {tab === 'fiches' && '📋 Gestion des Fiches'} 
+              {tab === 'alertes' && '⚠️ Alertes & Anomalies'}
+              {tab === 'parametres' && '⚙️ Paramètres'}
             </h1>
             <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
               PADES Microfinance — Back-office Super Admin
@@ -1844,8 +1994,229 @@ const [deleteFicheConfirm, setDeleteFicheConfirm] = useState<string | null>(null
   </div>
 )}
 
+{/* ════ ALERTES ════ */}
+{tab === 'alertes' && (
+  <div className="space-y-4">
+    <div className="flex items-center justify-between">
+      <div>
+        <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+          Alertes & Anomalies
+        </h2>
+        <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
+          {alertesData.length} alerte(s) active(s)
+        </p>
+      </div>
+      <button type="button" onClick={loadAlertes}
+        className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium"
+        style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+        🔄 Actualiser
+      </button>
+    </div>
+
+    {/* Stats alertes */}
+    <div className="grid grid-cols-3 gap-4">
+      {[
+        { label: 'Critiques', value: alertesData.filter(a => a.type === 'error').length, bg: '#FEF2F2', color: '#991B1B', icon: '🚨' },
+        { label: 'Avertissements', value: alertesData.filter(a => a.type === 'warning').length, bg: '#FEF9C3', color: '#854D0E', icon: '⚠️' },
+        { label: 'Informations', value: alertesData.filter(a => a.type === 'info').length, bg: '#EEF2FF', color: '#2A4E94', icon: 'ℹ️' },
+      ].map(s => (
+        <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
+            style={{ backgroundColor: s.bg }}>{s.icon}</div>
+          <div>
+            <div className="font-bold text-2xl" style={{ color: s.color }}>{s.value}</div>
+            <div className="text-xs" style={{ color: '#818387' }}>{s.label}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+
+    {/* Liste alertes */}
+    {alertesLoading ? (
+      <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center">
+        <div className="w-8 h-8 border-4 rounded-full animate-spin mx-auto mb-3"
+          style={{ borderColor: '#2A4E94', borderTopColor: 'transparent' }} />
+        <p className="text-sm" style={{ color: '#818387' }}>Analyse en cours...</p>
+      </div>
+    ) : alertesData.length === 0 ? (
+      <div className="bg-white rounded-2xl border border-gray-100 p-12 text-center">
+        <div className="text-5xl mb-4">✅</div>
+        <div className="font-semibold text-base" style={{ color: '#166534' }}>
+          Aucune alerte active
+        </div>
+        <div className="text-sm mt-2" style={{ color: '#818387' }}>
+          Tout est en ordre. Le réseau PADES fonctionne normalement.
+        </div>
+      </div>
+    ) : (
+      <div className="space-y-3">
+        {alertesData.map((alerte, i) => (
+          <div key={i} className="bg-white rounded-2xl border p-4 flex items-start gap-4"
+            style={{
+              borderColor: alerte.type === 'error' ? '#FECACA'
+                : alerte.type === 'warning' ? '#FDE68A' : '#C7D2FE'
+            }}>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+              style={{
+                backgroundColor: alerte.type === 'error' ? '#FEF2F2'
+                  : alerte.type === 'warning' ? '#FEF9C3' : '#EEF2FF'
+              }}>
+              {alerte.type === 'error' ? '🚨' : alerte.type === 'warning' ? '⚠️' : 'ℹ️'}
+            </div>
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{
+                    backgroundColor: alerte.type === 'error' ? '#FEE2E2'
+                      : alerte.type === 'warning' ? '#FEF9C3' : '#EEF2FF',
+                    color: alerte.type === 'error' ? '#991B1B'
+                      : alerte.type === 'warning' ? '#854D0E' : '#2A4E94'
+                  }}>
+                  {alerte.categorie}
+                </span>
+                <span className="text-xs" style={{ color: '#818387' }}>
+                  {new Date(alerte.date).toLocaleDateString('fr-FR')}
+                </span>
+              </div>
+              <div className="font-semibold text-sm" style={{ color: '#1a1a2e' }}>
+                {alerte.message}
+              </div>
+              <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
+                {alerte.detail}
+              </div>
+            </div>
+            <button type="button"
+              onClick={() => setTab(alerte.action as Tab)}
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold flex-shrink-0"
+              style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+              Voir →
+            </button>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+)}
+
+{/* ════ PARAMÈTRES ════ */}
+{tab === 'parametres' && (
+  <div className="max-w-2xl space-y-6">
+    <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+      Paramètres du back-office
+    </h2>
+
+    {/* Profil admin */}
+    <div className="bg-white rounded-2xl border border-gray-100 p-6">
+      <h3 className="font-semibold text-sm mb-5 flex items-center gap-2" style={{ color: '#2A4E94' }}>
+        👤 Mon profil administrateur
+      </h3>
+
+      {adminSuccess && (
+        <div className="mb-4 p-3 rounded-xl text-sm flex items-center gap-2"
+          style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
+          ✅ Profil mis à jour avec succès
+        </div>
+      )}
+
+      <form onSubmit={saveAdminProfile} className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Prénom</label>
+            <input type="text" value={adminForm.prenom}
+              onChange={e => setAdminForm(p => ({ ...p, prenom: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Nom</label>
+            <input type="text" value={adminForm.nom}
+              onChange={e => setAdminForm(p => ({ ...p, nom: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }} />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Téléphone</label>
+          <input type="tel" value={adminForm.telephone}
+            onChange={e => setAdminForm(p => ({ ...p, telephone: e.target.value }))}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+            style={{ borderColor: '#e2e8f0' }}
+            placeholder="+228 9X XX XX XX" />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Email</label>
+          <div className="px-4 py-3 rounded-xl text-sm"
+            style={{ backgroundColor: '#f8fafc', color: '#818387' }}>
+            {admin?.email} — non modifiable
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>Rôle</label>
+          <div className="px-4 py-3 rounded-xl text-sm"
+            style={{ backgroundColor: '#f8fafc', color: '#818387' }}>
+            Administrateur — non modifiable
+          </div>
+        </div>
+        <button type="submit" disabled={adminSaving}
+          className="w-full py-3 rounded-xl text-white text-sm font-semibold"
+          style={{ backgroundColor: adminSaving ? '#818387' : '#2A4E94' }}>
+          {adminSaving ? 'Sauvegarde...' : 'Enregistrer les modifications'}
+        </button>
+      </form>
+    </div>
+
+    {/* Infos plateforme */}
+    <div className="bg-white rounded-2xl border border-gray-100 p-6">
+      <h3 className="font-semibold text-sm mb-4 flex items-center gap-2" style={{ color: '#2A4E94' }}>
+        🏦 Informations PERCOM
+      </h3>
+      <div className="space-y-3">
+        {[
+          { label: 'Application', value: 'PERCOM v1.0' },
+          { label: 'Organisation', value: 'PADES Microfinance' },
+          { label: 'Total agences', value: `${stats.totalAgences} agence(s)` },
+          { label: 'Total utilisateurs', value: `${stats.totalAgents} agent(s)` },
+          { label: 'Objectifs définis', value: `${objectifs.length} objectif(s)` },
+          { label: 'Fiches soumises', value: `${fiches.length} fiche(s)` },
+        ].map(item => (
+          <div key={item.label} className="flex items-center justify-between py-2 border-b last:border-0"
+            style={{ borderColor: '#f1f5f9' }}>
+            <span className="text-xs" style={{ color: '#818387' }}>{item.label}</span>
+            <span className="text-xs font-semibold" style={{ color: '#1a1a2e' }}>{item.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {/* Danger zone */}
+    <div className="bg-white rounded-2xl border p-6" style={{ borderColor: '#FECACA' }}>
+      <h3 className="font-semibold text-sm mb-4" style={{ color: '#991B1B' }}>
+        🚨 Zone dangereuse
+      </h3>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between p-3 rounded-xl"
+          style={{ backgroundColor: '#FEF2F2' }}>
+          <div>
+            <div className="text-sm font-medium" style={{ color: '#1a1a2e' }}>
+              Se déconnecter
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
+              Terminer la session en cours
+            </div>
+          </div>
+          <button type="button" onClick={handleLogout}
+            className="px-4 py-2 rounded-xl text-sm font-semibold"
+            style={{ backgroundColor: '#E4322C', color: 'white' }}>
+            Déconnexion
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
           {/* Sections à venir */}
-          {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches'].includes(tab) && (
+          {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches', 'alertes', 'parametres'].includes(tab) && (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
                 <div className="text-5xl mb-4">🚧</div>
