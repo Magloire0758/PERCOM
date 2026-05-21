@@ -60,11 +60,43 @@ const [agentEditForm, setAgentEditForm] = useState<any>({})
 const [agentEditLoading, setAgentEditLoading] = useState(false)
 const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<string | null>(null)
 
+// Objectifs
+const [objectifs, setObjectifs] = useState<any[]>([])
+const [objectifSearch, setObjectifSearch] = useState('')
+const [objectifFilterType, setObjectifFilterType] = useState('tous')
+const [objectifFilterStatut, setObjectifFilterStatut] = useState('tous')
+const [objectifFilterCible, setObjectifFilterCible] = useState('tous')
+const [showObjectifModal, setShowObjectifModal] = useState(false)
+const [editingObjectif, setEditingObjectif] = useState<any>(null)
+const [deleteObjectifConfirm, setDeleteObjectifConfirm] = useState<string | null>(null)
+const [objectifLoading, setObjectifLoading] = useState(false)
+const [objectifForm, setObjectifForm] = useState({
+  titre: '',
+  type_periodicite: 'mensuel',
+  type_cible: 'agent',
+  agent_id: '',
+  equipe_id: '',
+  agence_id: '',
+  zone_id: '',
+  date_debut: '',
+  date_fin: '',
+  statut_objectif: 'actif',
+  cible_comptes: 6,
+  cible_comptes_actives: 4,
+  cible_montant: 25000,
+  cible_depots: 5,
+  cible_visites_prospects: 50,
+  cible_clients_suivis: 25,
+  cible_assurances: 0,
+  description: '',
+})
+
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
 
   useEffect(() => {
     if (tab === 'agents') loadAgentsData()
+    if (tab === 'objectifs') loadObjectifs()
   }, [tab])
   useEffect(() => { loadAll() }, [])
 
@@ -75,7 +107,7 @@ const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<string | null>(null
     if (!me || me.role !== 'admin') { router.push('/login'); return }
     setAdmin(me)
 
-    await Promise.all([loadStats(), loadAgences(), loadAgentsData()])
+    await Promise.all([loadStats(), loadAgences(), loadAgentsData(), loadObjectifs()])
     setLoading(false)
   }
 
@@ -306,6 +338,119 @@ const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<string | null>(null
     setAgentFiches(prev => prev.map(f => f.id === ficheId ? { ...f, manquant_regle: true } : f))
   }
 
+  async function loadObjectifs() {
+    const { data } = await supabase
+      .from('objectifs')
+      .select('*, agents(nom, prenom), equipes(nom), agences(nom), zones(nom, numero)')
+      .order('created_at', { ascending: false })
+    setObjectifs(data || [])
+  }
+  
+  async function saveObjectif(e: React.FormEvent) {
+    e.preventDefault()
+    setObjectifLoading(true)
+  
+    const payload = {
+      titre: objectifForm.titre,
+      type_periodicite: objectifForm.type_periodicite,
+      type_cible: objectifForm.type_cible,
+      agent_id: objectifForm.type_cible === 'agent' ? objectifForm.agent_id || null : null,
+      equipe_id: objectifForm.type_cible === 'equipe' ? objectifForm.equipe_id || null : null,
+      agence_id: ['agence', 'global'].includes(objectifForm.type_cible) ? objectifForm.agence_id || null : null,
+      zone_id: objectifForm.zone_id || null,
+      date_debut: objectifForm.date_debut || null,
+      date_fin: objectifForm.date_fin || null,
+      statut_objectif: objectifForm.statut_objectif,
+      cible_comptes: objectifForm.cible_comptes,
+      cible_comptes_actives: objectifForm.cible_comptes_actives,
+      cible_montant: objectifForm.cible_montant,
+      cible_depots: objectifForm.cible_depots,
+      cible_visites_prospects: objectifForm.cible_visites_prospects,
+      cible_clients_suivis: objectifForm.cible_clients_suivis,
+      cible_assurances: objectifForm.cible_assurances,
+      description: objectifForm.description,
+      mois: new Date().getMonth() + 1,
+      annee: new Date().getFullYear(),
+    }
+  
+    if (editingObjectif) {
+      await supabase.from('objectifs').update(payload).eq('id', editingObjectif.id)
+      setObjectifs(prev => prev.map(o => o.id === editingObjectif.id ? { ...o, ...payload } : o))
+    } else {
+      const { data } = await supabase.from('objectifs').insert(payload).select().single()
+      if (data) setObjectifs(prev => [data, ...prev])
+    }
+  
+    setShowObjectifModal(false)
+    setEditingObjectif(null)
+    resetObjectifForm()
+    setObjectifLoading(false)
+  }
+  
+  async function dupliquerObjectif(obj: any) {
+    const { data } = await supabase.from('objectifs').insert({
+      ...obj,
+      id: undefined,
+      titre: `${obj.titre} (copie)`,
+      created_at: undefined,
+      statut_objectif: 'actif',
+    }).select().single()
+    if (data) setObjectifs(prev => [data, ...prev])
+  }
+  
+  async function toggleObjectifStatut(id: string, statut: string) {
+    await supabase.from('objectifs').update({ statut_objectif: statut }).eq('id', id)
+    setObjectifs(prev => prev.map(o => o.id === id ? { ...o, statut_objectif: statut } : o))
+  }
+  
+  async function deleteObjectif(id: string) {
+    await supabase.from('objectifs').delete().eq('id', id)
+    setObjectifs(prev => prev.filter(o => o.id !== id))
+    setDeleteObjectifConfirm(null)
+  }
+  
+  function resetObjectifForm() {
+    setObjectifForm({
+      titre: '', type_periodicite: 'mensuel', type_cible: 'agent',
+      agent_id: '', equipe_id: '', agence_id: '', zone_id: '',
+      date_debut: '', date_fin: '', statut_objectif: 'actif',
+      cible_comptes: 6, cible_comptes_actives: 4, cible_montant: 25000,
+      cible_depots: 5, cible_visites_prospects: 50, cible_clients_suivis: 25,
+      cible_assurances: 0, description: '',
+    })
+  }
+  
+  function openCreateObjectif() {
+    setEditingObjectif(null)
+    resetObjectifForm()
+    setShowObjectifModal(true)
+  }
+  
+  function openEditObjectif(obj: any) {
+    setEditingObjectif(obj)
+    setObjectifForm({
+      titre: obj.titre || '',
+      type_periodicite: obj.type_periodicite || 'mensuel',
+      type_cible: obj.type_cible || 'agent',
+      agent_id: obj.agent_id || '',
+      equipe_id: obj.equipe_id || '',
+      agence_id: obj.agence_id || '',
+      zone_id: obj.zone_id || '',
+      date_debut: obj.date_debut || '',
+      date_fin: obj.date_fin || '',
+      statut_objectif: obj.statut_objectif || 'actif',
+      cible_comptes: obj.cible_comptes || 6,
+      cible_comptes_actives: obj.cible_comptes_actives || 4,
+      cible_montant: obj.cible_montant || 25000,
+      cible_depots: obj.cible_depots || 5,
+      cible_visites_prospects: obj.cible_visites_prospects || 50,
+      cible_clients_suivis: obj.cible_clients_suivis || 25,
+      cible_assurances: obj.cible_assurances || 0,
+      description: obj.description || '',
+    })
+    setShowObjectifModal(true)
+  }
+
   function openCreateAgence() {
     setEditingAgence(null)
     setAgenceForm({ nom: '', region: '', adresse: '', telephone: '', email: '', actif: true })
@@ -333,7 +478,7 @@ const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<string | null>(null
     { key: 'dashboard', label: 'Dashboard', icon: '📊', active: true },
     { key: 'agences', label: 'Agences', icon: '🏦', active: true },
     { key: 'agents', label: 'Agents', icon: '👥', active: true },
-    { key: 'objectifs', label: 'Objectifs', icon: '🎯', active: false },
+    { key: 'objectifs', label: 'Objectifs', icon: '🎯', active: true },
     { key: 'fiches', label: 'Fiches', icon: '📋', active: false },
     { key: 'alertes', label: 'Alertes', icon: '⚠️', active: false },
     { key: 'parametres', label: 'Paramètres', icon: '⚙️', active: false },
@@ -406,6 +551,8 @@ const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<string | null>(null
             <h1 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>
               {tab === 'dashboard' && '📊 Dashboard Stratégique'}
               {tab === 'agences' && '🏦 Gestion des Agences'}
+              {tab === 'agents' && '👥 Gestion des Agents'}
+              {tab === 'objectifs' && '🎯 Gestion des Objectifs'}
             </h1>
             <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
               PADES Microfinance — Back-office Super Admin
@@ -1139,8 +1286,214 @@ const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<string | null>(null
   </div>
 )}
 
+{/* ════ OBJECTIFS ════ */}
+{tab === 'objectifs' && (
+  <div className="space-y-4">
+
+    {/* Header */}
+    <div className="flex items-center justify-between">
+      <div>
+        <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+          Gestion des objectifs
+        </h2>
+        <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
+          {objectifs.length} objectif(s) défini(s)
+        </p>
+      </div>
+      <button type="button" onClick={openCreateObjectif}
+        className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-sm font-semibold"
+        style={{ backgroundColor: '#2A4E94' }}>
+        ➕ Nouvel objectif
+      </button>
+    </div>
+
+    {/* Filtres */}
+    <div className="bg-white rounded-2xl p-4 border border-gray-100 flex flex-wrap gap-3">
+      <div className="relative flex-1 min-w-48">
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          <svg className="w-4 h-4" style={{ color: '#818387' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+        <input type="text" placeholder="Rechercher un objectif..."
+          value={objectifSearch} onChange={e => setObjectifSearch(e.target.value)}
+          className="w-full pl-9 pr-4 py-2 rounded-xl border text-sm outline-none"
+          style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+      </div>
+      <select value={objectifFilterType} onChange={e => setObjectifFilterType(e.target.value)}
+        className="px-3 py-2 rounded-xl border text-xs outline-none"
+        style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+        <option value="tous">Toutes les périodes</option>
+        <option value="journalier">Journalier</option>
+        <option value="hebdomadaire">Hebdomadaire</option>
+        <option value="mensuel">Mensuel</option>
+        <option value="trimestriel">Trimestriel</option>
+        <option value="annuel">Annuel</option>
+        <option value="permanent">Permanent</option>
+      </select>
+      <select value={objectifFilterCible} onChange={e => setObjectifFilterCible(e.target.value)}
+        className="px-3 py-2 rounded-xl border text-xs outline-none"
+        style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+        <option value="tous">Toutes les cibles</option>
+        <option value="agent">Agent</option>
+        <option value="equipe">Équipe</option>
+        <option value="agence">Agence</option>
+        <option value="global">Global</option>
+      </select>
+      <select value={objectifFilterStatut} onChange={e => setObjectifFilterStatut(e.target.value)}
+        className="px-3 py-2 rounded-xl border text-xs outline-none"
+        style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+        <option value="tous">Tous les statuts</option>
+        <option value="actif">Actif</option>
+        <option value="suspendu">Suspendu</option>
+        <option value="expire">Expiré</option>
+      </select>
+    </div>
+
+    {/* Liste objectifs */}
+    {(() => {
+      const filtered = objectifs.filter(o => {
+        const ms = objectifSearch === '' || (o.titre || '').toLowerCase().includes(objectifSearch.toLowerCase())
+        const mt = objectifFilterType === 'tous' || o.type_periodicite === objectifFilterType
+        const mc = objectifFilterCible === 'tous' || o.type_cible === objectifFilterCible
+        const mst = objectifFilterStatut === 'tous' || o.statut_objectif === objectifFilterStatut
+        return ms && mt && mc && mst
+      })
+
+      if (filtered.length === 0) return (
+        <div className="bg-white rounded-2xl border border-gray-100 p-12 text-center">
+          <div className="text-5xl mb-4">🎯</div>
+          <div className="font-semibold text-base" style={{ color: '#1a1a2e' }}>
+            Aucun objectif trouvé
+          </div>
+          <div className="text-sm mt-2 mb-6" style={{ color: '#818387' }}>
+            Créez votre premier objectif pour commencer à piloter les performances
+          </div>
+          <button type="button" onClick={openCreateObjectif}
+            className="px-6 py-3 rounded-xl text-white text-sm font-semibold"
+            style={{ backgroundColor: '#2A4E94' }}>
+            ➕ Créer un objectif
+          </button>
+        </div>
+      )
+
+      return (
+        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {filtered.map(obj => {
+            const periodeColor: Record<string, { bg: string, color: string }> = {
+              journalier: { bg: '#EEF2FF', color: '#2A4E94' },
+              hebdomadaire: { bg: '#F0FDF4', color: '#166534' },
+              mensuel: { bg: '#FEF9C3', color: '#854D0E' },
+              trimestriel: { bg: '#FEF2F2', color: '#991B1B' },
+              annuel: { bg: '#F5F3FF', color: '#5B21B6' },
+              permanent: { bg: '#F0FDF4', color: '#166534' },
+            }
+            const pc = periodeColor[obj.type_periodicite] || { bg: '#EEF2FF', color: '#2A4E94' }
+
+            return (
+              <div key={obj.id} className="bg-white rounded-2xl border border-gray-100 p-5">
+                {/* Header card */}
+                <div className="flex items-start justify-between mb-4">
+                  <div className="flex-1">
+                    <div className="font-bold text-sm" style={{ color: '#1a1a2e' }}>
+                      {obj.titre || 'Sans titre'}
+                    </div>
+                    <div className="flex gap-2 mt-2 flex-wrap">
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                        style={{ backgroundColor: pc.bg, color: pc.color }}>
+                        {obj.type_periodicite}
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                        style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>
+                        {obj.type_cible === 'agent' && `👤 ${obj.agents?.prenom || ''} ${obj.agents?.nom || ''}`}
+                        {obj.type_cible === 'equipe' && `👥 ${obj.equipes?.nom || 'Équipe'}`}
+                        {obj.type_cible === 'agence' && `🏦 ${obj.agences?.nom || 'Agence'}`}
+                        {obj.type_cible === 'global' && '🌍 Global'}
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                        style={{
+                          backgroundColor: obj.statut_objectif === 'actif' ? '#DCFCE7'
+                            : obj.statut_objectif === 'suspendu' ? '#FEF9C3' : '#FEE2E2',
+                          color: obj.statut_objectif === 'actif' ? '#166534'
+                            : obj.statut_objectif === 'suspendu' ? '#854D0E' : '#991B1B'
+                        }}>
+                        {obj.statut_objectif === 'actif' ? '✅ Actif'
+                          : obj.statut_objectif === 'suspendu' ? '⏸ Suspendu' : '❌ Expiré'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* KPIs cibles */}
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                  {[
+                    { label: 'Comptes', value: obj.cible_comptes },
+                    { label: 'Activés', value: obj.cible_comptes_actives },
+                    { label: 'Montant', value: (obj.cible_montant || 0).toLocaleString() + ' F' },
+                    { label: 'Dépôts', value: obj.cible_depots },
+                    { label: 'Prospects', value: obj.cible_visites_prospects },
+                    { label: 'Clients', value: obj.cible_clients_suivis },
+                  ].map(k => (
+                    <div key={k.label} className="rounded-lg p-2"
+                      style={{ backgroundColor: '#f8fafc' }}>
+                      <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
+                      <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{k.value}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Dates */}
+                {(obj.date_debut || obj.date_fin) && (
+                  <div className="text-xs mb-3 flex gap-3" style={{ color: '#818387' }}>
+                    {obj.date_debut && <span>📅 Du {new Date(obj.date_debut).toLocaleDateString('fr-FR')}</span>}
+                    {obj.date_fin && <span>→ {new Date(obj.date_fin).toLocaleDateString('fr-FR')}</span>}
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex gap-2 pt-3 border-t" style={{ borderColor: '#f1f5f9' }}>
+                  <button type="button" onClick={() => openEditObjectif(obj)}
+                    className="flex-1 py-1.5 rounded-lg text-xs font-medium"
+                    style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                    ✏️ Modifier
+                  </button>
+                  <button type="button" onClick={() => dupliquerObjectif(obj)}
+                    className="flex-1 py-1.5 rounded-lg text-xs font-medium"
+                    style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
+                    📋 Dupliquer
+                  </button>
+                  {obj.statut_objectif === 'actif' ? (
+                    <button type="button"
+                      onClick={() => toggleObjectifStatut(obj.id, 'suspendu')}
+                      className="flex-1 py-1.5 rounded-lg text-xs font-medium"
+                      style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
+                      ⏸ Suspendre
+                    </button>
+                  ) : (
+                    <button type="button"
+                      onClick={() => toggleObjectifStatut(obj.id, 'actif')}
+                      className="flex-1 py-1.5 rounded-lg text-xs font-medium"
+                      style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
+                      ▶️ Activer
+                    </button>
+                  )}
+                  <button type="button" onClick={() => setDeleteObjectifConfirm(obj.id)}
+                    className="p-1.5 rounded-lg"
+                    style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+                    🗑️
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )
+    })()}
+  </div>
+)}
+
           {/* Sections à venir */}
-          {!['dashboard', 'agences', 'agents'].includes(tab) && (
+          {!['dashboard', 'agences', 'agents', 'objectifs'].includes(tab) && (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
                 <div className="text-5xl mb-4">🚧</div>
@@ -1436,6 +1789,231 @@ const [deleteAgentConfirm, setDeleteAgentConfirm] = useState<string | null>(null
           className="flex-1 py-3 rounded-xl text-sm font-semibold border"
           style={{ borderColor: '#e2e8f0', color: '#818387' }}>Annuler</button>
         <button type="button" onClick={() => deleteAgent(deleteAgentConfirm)}
+          className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+          style={{ backgroundColor: '#E4322C' }}>Supprimer</button>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* MODAL OBJECTIF */}
+{showObjectifModal && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl overflow-hidden">
+      <div className="px-6 py-4 border-b flex items-center justify-between"
+        style={{ borderColor: '#f1f5f9' }}>
+        <h3 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>
+          {editingObjectif ? '✏️ Modifier l\'objectif' : '🎯 Nouvel objectif'}
+        </h3>
+        <button type="button" onClick={() => { setShowObjectifModal(false); setEditingObjectif(null) }}
+          className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+      </div>
+
+      <form onSubmit={saveObjectif} className="p-6 space-y-5 overflow-y-auto" style={{ maxHeight: '80vh' }}>
+
+        {/* Titre + Description */}
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+              Titre de l&apos;objectif *
+            </label>
+            <input type="text" value={objectifForm.titre}
+              onChange={e => setObjectifForm(p => ({ ...p, titre: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }}
+              placeholder="Ex: Objectif mensuel agents Sagbado" required />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+              Description (optionnel)
+            </label>
+            <textarea value={objectifForm.description}
+              onChange={e => setObjectifForm(p => ({ ...p, description: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none resize-none"
+              style={{ borderColor: '#e2e8f0' }} rows={2}
+              placeholder="Notes ou instructions supplémentaires..." />
+          </div>
+        </div>
+
+        {/* Période + Statut */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+              Périodicité *
+            </label>
+            <select value={objectifForm.type_periodicite}
+              onChange={e => setObjectifForm(p => ({ ...p, type_periodicite: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }}>
+              <option value="journalier">📅 Journalier</option>
+              <option value="hebdomadaire">📅 Hebdomadaire</option>
+              <option value="mensuel">📅 Mensuel</option>
+              <option value="trimestriel">📅 Trimestriel</option>
+              <option value="annuel">📅 Annuel</option>
+              <option value="permanent">♾️ Permanent</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+              Statut
+            </label>
+            <select value={objectifForm.statut_objectif}
+              onChange={e => setObjectifForm(p => ({ ...p, statut_objectif: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }}>
+              <option value="actif">✅ Actif</option>
+              <option value="suspendu">⏸ Suspendu</option>
+              <option value="expire">❌ Expiré</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Dates */}
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+              Date de début
+            </label>
+            <input type="date" value={objectifForm.date_debut}
+              onChange={e => setObjectifForm(p => ({ ...p, date_debut: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+              Date de fin
+            </label>
+            <input type="date" value={objectifForm.date_fin}
+              onChange={e => setObjectifForm(p => ({ ...p, date_fin: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }} />
+          </div>
+        </div>
+
+        {/* Cible */}
+        <div className="rounded-2xl border p-4 space-y-3" style={{ borderColor: '#e2e8f0' }}>
+          <div className="text-xs font-bold" style={{ color: '#1a1a2e' }}>🎯 Affecter à</div>
+          <div className="grid grid-cols-4 gap-2">
+            {[
+              { key: 'agent', label: '👤 Agent' },
+              { key: 'equipe', label: '👥 Équipe' },
+              { key: 'agence', label: '🏦 Agence' },
+              { key: 'global', label: '🌍 Global' },
+            ].map(t => (
+              <button key={t.key} type="button"
+                onClick={() => setObjectifForm(p => ({ ...p, type_cible: t.key }))}
+                className="py-2 rounded-xl text-xs font-semibold transition-all"
+                style={{
+                  backgroundColor: objectifForm.type_cible === t.key ? '#2A4E94' : '#f8fafc',
+                  color: objectifForm.type_cible === t.key ? 'white' : '#818387',
+                }}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {objectifForm.type_cible === 'agent' && (
+            <select value={objectifForm.agent_id}
+              onChange={e => setObjectifForm(p => ({ ...p, agent_id: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }}>
+              <option value="">Sélectionner un agent</option>
+              {agentsData.filter(a => a.role === 'agent').map(a => (
+                <option key={a.id} value={a.id}>{a.prenom} {a.nom} — {a.agences?.nom || '—'}</option>
+              ))}
+            </select>
+          )}
+
+          {objectifForm.type_cible === 'agence' && (
+            <select value={objectifForm.agence_id}
+              onChange={e => setObjectifForm(p => ({ ...p, agence_id: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }}>
+              <option value="">Sélectionner une agence</option>
+              {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
+            </select>
+          )}
+
+          {objectifForm.type_cible === 'global' && (
+            <div className="p-3 rounded-xl text-xs" style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+              ℹ️ Cet objectif s&apos;appliquera à l&apos;ensemble du réseau PADES Microfinance.
+            </div>
+          )}
+        </div>
+
+        {/* KPIs cibles */}
+        <div className="rounded-2xl border p-4 space-y-4" style={{ borderColor: '#e2e8f0' }}>
+          <div className="text-xs font-bold" style={{ color: '#1a1a2e' }}>📊 Indicateurs cibles</div>
+          <div className="grid grid-cols-2 gap-4">
+            {[
+              { key: 'cible_comptes', label: 'Comptes à ouvrir', placeholder: '6' },
+              { key: 'cible_comptes_actives', label: 'Comptes à activer', placeholder: '4' },
+              { key: 'cible_depots', label: 'Nombre de dépôts', placeholder: '5' },
+              { key: 'cible_assurances', label: 'Assurances à vendre', placeholder: '0' },
+              { key: 'cible_visites_prospects', label: 'Prospects à visiter', placeholder: '50' },
+              { key: 'cible_clients_suivis', label: 'Clients à suivre', placeholder: '25' },
+            ].map(field => (
+              <div key={field.key}>
+                <label className="block text-xs font-medium mb-1.5" style={{ color: '#818387' }}>
+                  {field.label}
+                </label>
+                <input type="number" min="0"
+                  value={(objectifForm as any)[field.key]}
+                  onChange={e => setObjectifForm(p => ({ ...p, [field.key]: parseInt(e.target.value) || 0 }))}
+                  className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                  style={{ borderColor: '#e2e8f0' }}
+                  placeholder={field.placeholder} />
+              </div>
+            ))}
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1.5" style={{ color: '#818387' }}>
+              Montant cible (FCFA)
+            </label>
+            <input type="number" min="0"
+              value={objectifForm.cible_montant}
+              onChange={e => setObjectifForm(p => ({ ...p, cible_montant: parseFloat(e.target.value) || 0 }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }}
+              placeholder="25000" />
+          </div>
+        </div>
+
+        {/* Boutons */}
+        <div className="flex gap-3">
+          <button type="button"
+            onClick={() => { setShowObjectifModal(false); setEditingObjectif(null) }}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+            style={{ borderColor: '#e2e8f0', color: '#818387' }}>
+            Annuler
+          </button>
+          <button type="submit" disabled={objectifLoading}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+            style={{ backgroundColor: objectifLoading ? '#818387' : '#2A4E94' }}>
+            {objectifLoading ? 'Sauvegarde...' : editingObjectif ? 'Enregistrer' : 'Créer l\'objectif'}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+)}
+
+{/* MODAL SUPPRESSION OBJECTIF */}
+{deleteObjectifConfirm && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center">
+      <div className="text-4xl mb-4">🎯</div>
+      <h3 className="font-bold text-lg mb-2" style={{ color: '#1a1a2e' }}>Supprimer cet objectif ?</h3>
+      <p className="text-sm mb-6" style={{ color: '#818387' }}>
+        Cette action est irréversible.
+      </p>
+      <div className="flex gap-3">
+        <button type="button" onClick={() => setDeleteObjectifConfirm(null)}
+          className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+          style={{ borderColor: '#e2e8f0', color: '#818387' }}>Annuler</button>
+        <button type="button" onClick={() => deleteObjectif(deleteObjectifConfirm)}
           className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
           style={{ backgroundColor: '#E4322C' }}>Supprimer</button>
       </div>
