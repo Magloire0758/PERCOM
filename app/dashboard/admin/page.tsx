@@ -91,12 +91,23 @@ const [objectifForm, setObjectifForm] = useState({
   description: '',
 })
 
+// Fiches
+const [fiches, setFiches] = useState<any[]>([])
+const [ficheSearch, setFicheSearch] = useState('')
+const [ficheFilterAgence, setFicheFilterAgence] = useState('tous')
+const [ficheFilterStatut, setFicheFilterStatut] = useState('tous')
+const [ficheFilterDate, setFicheFilterDate] = useState('')
+const [ficheFilterManquant, setFicheFilterManquant] = useState('tous')
+const [selectedFiche, setSelectedFiche] = useState<any>(null)
+const [deleteFicheConfirm, setDeleteFicheConfirm] = useState<string | null>(null)
+
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
 
   useEffect(() => {
     if (tab === 'agents') loadAgentsData()
     if (tab === 'objectifs') loadObjectifs()
+    if (tab === 'fiches') loadFiches()
   }, [tab])
   useEffect(() => { loadAll() }, [])
 
@@ -107,9 +118,11 @@ const [objectifForm, setObjectifForm] = useState({
     if (!me || me.role !== 'admin') { router.push('/login'); return }
     setAdmin(me)
 
-    await Promise.all([loadStats(), loadAgences(), loadAgentsData(), loadObjectifs()])
+    await Promise.all([loadStats(), loadAgences(), loadAgentsData(), loadObjectifs(), loadFiches()])
     setLoading(false)
   }
+
+
 
   async function loadStats() {
     const [
@@ -451,6 +464,37 @@ const [objectifForm, setObjectifForm] = useState({
     setShowObjectifModal(true)
   }
 
+  async function loadFiches() {
+    const { data } = await supabase
+      .from('fiches_journalieres')
+      .select('*, agents!inner(nom, prenom, agence_id, agences(nom))')
+      .order('date', { ascending: false })
+      .limit(100)
+    setFiches(data || [])
+  }
+  
+  async function validerFicheAdmin(ficheId: string) {
+    await supabase.from('fiches_journalieres').update({ valide_chef: true }).eq('id', ficheId)
+    setFiches(prev => prev.map(f => f.id === ficheId ? { ...f, valide_chef: true } : f))
+    if (selectedFiche?.id === ficheId) setSelectedFiche((p: any) => ({ ...p, valide_chef: true }))
+  }
+  
+  async function confirmerManquantAdmin(ficheId: string) {
+    await supabase.from('fiches_journalieres').update({
+      manquant_regle: true,
+      manquant_regle_at: new Date().toISOString(),
+    }).eq('id', ficheId)
+    setFiches(prev => prev.map(f => f.id === ficheId ? { ...f, manquant_regle: true } : f))
+    if (selectedFiche?.id === ficheId) setSelectedFiche((p: any) => ({ ...p, manquant_regle: true }))
+  }
+  
+  async function deleteFiche(ficheId: string) {
+    await supabase.from('fiches_journalieres').delete().eq('id', ficheId)
+    setFiches(prev => prev.filter(f => f.id !== ficheId))
+    if (selectedFiche?.id === ficheId) setSelectedFiche(null)
+    setDeleteFicheConfirm(null)
+  }
+
   function openCreateAgence() {
     setEditingAgence(null)
     setAgenceForm({ nom: '', region: '', adresse: '', telephone: '', email: '', actif: true })
@@ -479,7 +523,7 @@ const [objectifForm, setObjectifForm] = useState({
     { key: 'agences', label: 'Agences', icon: '🏦', active: true },
     { key: 'agents', label: 'Agents', icon: '👥', active: true },
     { key: 'objectifs', label: 'Objectifs', icon: '🎯', active: true },
-    { key: 'fiches', label: 'Fiches', icon: '📋', active: false },
+    { key: 'fiches', label: 'Fiches', icon: '📋', active: true },
     { key: 'alertes', label: 'Alertes', icon: '⚠️', active: false },
     { key: 'parametres', label: 'Paramètres', icon: '⚙️', active: false },
   ]
@@ -553,6 +597,7 @@ const [objectifForm, setObjectifForm] = useState({
               {tab === 'agences' && '🏦 Gestion des Agences'}
               {tab === 'agents' && '👥 Gestion des Agents'}
               {tab === 'objectifs' && '🎯 Gestion des Objectifs'}
+              {tab === 'fiches' && '📋 Gestion des Fiches'}
             </h1>
             <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
               PADES Microfinance — Back-office Super Admin
@@ -1492,8 +1537,315 @@ const [objectifForm, setObjectifForm] = useState({
   </div>
 )}
 
+{/* ════ FICHES ════ */}
+{tab === 'fiches' && (
+  <div className="flex gap-4">
+
+    {/* Liste fiches */}
+    <div className={`flex flex-col space-y-4 transition-all ${selectedFiche ? 'w-1/2' : 'w-full'}`}>
+
+      {/* Stats rapides */}
+      <div className="grid grid-cols-4 gap-3">
+        {[
+          { label: 'Total fiches', value: fiches.length, bg: '#EEF2FF', color: '#2A4E94' },
+          { label: 'Non validées', value: fiches.filter(f => !f.valide_chef).length, bg: '#FEF9C3', color: '#854D0E' },
+          { label: 'Avec manquant', value: fiches.filter(f => (f.montant_mobilise - f.montant_rapporte) > 0 && !f.manquant_regle).length, bg: '#FEF2F2', color: '#991B1B' },
+          { label: 'Validées', value: fiches.filter(f => f.valide_chef).length, bg: '#F0FDF4', color: '#166534' },
+        ].map(s => (
+          <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 text-center">
+            <div className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</div>
+            <div className="text-xs mt-1" style={{ color: '#818387' }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filtres */}
+      <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3">
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <svg className="w-4 h-4" style={{ color: '#818387' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          <input type="text" placeholder="Rechercher par agent..."
+            value={ficheSearch} onChange={e => setFicheSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 rounded-xl border text-sm outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <input type="date" value={ficheFilterDate}
+            onChange={e => setFicheFilterDate(e.target.value)}
+            className="px-3 py-2 rounded-xl border text-xs outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+          <select value={ficheFilterAgence} onChange={e => setFicheFilterAgence(e.target.value)}
+            className="px-3 py-2 rounded-xl border text-xs outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+            <option value="tous">Toutes les agences</option>
+            {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
+          </select>
+          <select value={ficheFilterStatut} onChange={e => setFicheFilterStatut(e.target.value)}
+            className="px-3 py-2 rounded-xl border text-xs outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+            <option value="tous">Tous les statuts</option>
+            <option value="validee">Validée</option>
+            <option value="en_attente">En attente</option>
+          </select>
+          <select value={ficheFilterManquant} onChange={e => setFicheFilterManquant(e.target.value)}
+            className="px-3 py-2 rounded-xl border text-xs outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+            <option value="tous">Tous les manquants</option>
+            <option value="avec">Avec manquant</option>
+            <option value="regle">Manquant réglé</option>
+            <option value="sans">Sans manquant</option>
+          </select>
+          {(ficheSearch || ficheFilterDate || ficheFilterAgence !== 'tous' || ficheFilterStatut !== 'tous' || ficheFilterManquant !== 'tous') && (
+            <button type="button"
+              onClick={() => { setFicheSearch(''); setFicheFilterDate(''); setFicheFilterAgence('tous'); setFicheFilterStatut('tous'); setFicheFilterManquant('tous') }}
+              className="px-3 py-2 rounded-xl text-xs font-medium"
+              style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+              ✕ Réinitialiser
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Tableau */}
+      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+        <div className="overflow-y-auto" style={{ maxHeight: '55vh' }}>
+          <table className="w-full">
+            <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
+              <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                {['Date', 'Agent', 'Agence', 'Collecté', 'Rapporté', 'Manquant', 'Statut', 'Actions'].map(h => (
+                  <th key={h} className="text-left px-3 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {fiches
+                .filter(f => {
+                  const ms = ficheSearch === '' || `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(ficheSearch.toLowerCase())
+                  const ma = ficheFilterAgence === 'tous' || f.agents?.agence_id === ficheFilterAgence
+                  const mst = ficheFilterStatut === 'tous' || (ficheFilterStatut === 'validee' ? f.valide_chef : !f.valide_chef)
+                  const md = ficheFilterDate === '' || f.date === ficheFilterDate
+                  const manq = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                  const mm = ficheFilterManquant === 'tous' ||
+                    (ficheFilterManquant === 'avec' && manq > 0 && !f.manquant_regle) ||
+                    (ficheFilterManquant === 'regle' && f.manquant_regle) ||
+                    (ficheFilterManquant === 'sans' && manq === 0)
+                  return ms && ma && mst && md && mm
+                })
+                .map((f, i, arr) => {
+                  const manq = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                  return (
+                    <tr key={f.id}
+                      onClick={() => setSelectedFiche(f)}
+                      className="cursor-pointer hover:bg-gray-50 transition-colors"
+                      style={{
+                        borderBottom: i < arr.length - 1 ? '1px solid #f8fafc' : 'none',
+                        backgroundColor: selectedFiche?.id === f.id ? '#EEF2FF' : undefined
+                      }}>
+                      <td className="px-3 py-3">
+                        <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                          {new Date(f.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                        </div>
+                        <div className="text-xs" style={{ color: '#818387' }}>
+                          {new Date(f.date).toLocaleDateString('fr-FR', { year: 'numeric' })}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                            style={{ backgroundColor: '#2A4E94' }}>
+                            {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
+                          </div>
+                          <span className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                            {f.agents?.prenom} {f.agents?.nom}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 text-xs" style={{ color: '#818387' }}>
+                        {f.agents?.agences?.nom || '—'}
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs font-semibold" style={{ color: '#166534' }}>
+                          {(f.montant_mobilise || 0).toLocaleString()} F
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs font-semibold" style={{ color: '#2A4E94' }}>
+                          {(f.montant_rapporte || 0).toLocaleString()} F
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">
+                        {manq > 0 ? (
+                          <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                            style={{
+                              backgroundColor: f.manquant_regle ? '#DCFCE7' : '#FEE2E2',
+                              color: f.manquant_regle ? '#166534' : '#991B1B'
+                            }}>
+                            {f.manquant_regle ? '✅' : '⚠️'} {manq.toLocaleString()} F
+                          </span>
+                        ) : (
+                          <span className="text-xs" style={{ color: '#818387' }}>—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                          style={{
+                            backgroundColor: f.valide_chef ? '#DCFCE7' : '#FEF9C3',
+                            color: f.valide_chef ? '#166534' : '#854D0E'
+                          }}>
+                          {f.valide_chef ? '✅ Validée' : '⏳ Attente'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                        <div className="flex gap-1">
+                          {!f.valide_chef && (
+                            <button type="button" onClick={() => validerFicheAdmin(f.id)}
+                              className="p-1.5 rounded-lg" title="Valider"
+                              style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>✅</button>
+                          )}
+                          {manq > 0 && !f.manquant_regle && (
+                            <button type="button" onClick={() => confirmerManquantAdmin(f.id)}
+                              className="p-1.5 rounded-lg" title="Confirmer manquant réglé"
+                              style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>💰</button>
+                          )}
+                          <button type="button" onClick={() => setDeleteFicheConfirm(f.id)}
+                            className="p-1.5 rounded-lg" title="Supprimer"
+                            style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>🗑️</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+            </tbody>
+          </table>
+          {fiches.length === 0 && (
+            <div className="p-12 text-center">
+              <div className="text-4xl mb-3">📋</div>
+              <div className="font-medium text-sm" style={{ color: '#1a1a2e' }}>Aucune fiche journalière</div>
+              <div className="text-xs mt-1" style={{ color: '#818387' }}>Les fiches apparaîtront ici dès que les agents commencent à soumettre</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+
+    {/* ── PANNEAU DÉTAIL FICHE ── */}
+    {selectedFiche && (
+      <div className="w-1/2 space-y-4">
+        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+
+          {/* Header */}
+          <div className="p-5 border-b flex items-start justify-between"
+            style={{ borderColor: '#f1f5f9' }}>
+            <div>
+              <div className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+                Fiche du {new Date(selectedFiche.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+              </div>
+              <div className="text-sm mt-0.5" style={{ color: '#818387' }}>
+                {selectedFiche.agents?.prenom} {selectedFiche.agents?.nom} · {selectedFiche.agents?.agences?.nom}
+              </div>
+              <div className="flex gap-2 mt-2">
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                  style={{
+                    backgroundColor: selectedFiche.valide_chef ? '#DCFCE7' : '#FEF9C3',
+                    color: selectedFiche.valide_chef ? '#166534' : '#854D0E'
+                  }}>
+                  {selectedFiche.valide_chef ? '✅ Validée' : '⏳ En attente de validation'}
+                </span>
+              </div>
+            </div>
+            <button type="button" onClick={() => setSelectedFiche(null)}
+              className="p-1.5 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+          </div>
+
+          {/* KPIs */}
+          <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+            <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>INDICATEURS</h4>
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { label: 'Comptes ouverts', value: selectedFiche.comptes_ouverts || 0 },
+                { label: 'Comptes activés', value: selectedFiche.comptes_actives || 0 },
+                { label: 'Montant collecté', value: (selectedFiche.montant_mobilise || 0).toLocaleString() + ' F' },
+                { label: 'Montant rapporté', value: (selectedFiche.montant_rapporte || 0).toLocaleString() + ' F' },
+                { label: 'Nombre de dépôts', value: selectedFiche.nb_depots || 0 },
+                { label: 'Prospects visités', value: selectedFiche.prospects_visites || 0 },
+                { label: 'Clients suivis', value: selectedFiche.clients_suivis || 0 },
+                { label: 'Assurances vendues', value: selectedFiche.assurances_vendues || 0 },
+              ].map(k => (
+                <div key={k.label} className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
+                  <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
+                  <div className="font-bold text-sm mt-0.5" style={{ color: '#2A4E94' }}>{k.value}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Manquant */}
+          {(() => {
+            const manq = Math.max(0, (selectedFiche.montant_mobilise || 0) - (selectedFiche.montant_rapporte || 0))
+            return manq > 0 ? (
+              <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+                <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>MANQUANT</h4>
+                <div className="rounded-2xl p-4 flex items-center justify-between"
+                  style={{
+                    backgroundColor: selectedFiche.manquant_regle ? '#F0FDF4' : '#FEF2F2',
+                    border: `1px solid ${selectedFiche.manquant_regle ? '#BBF7D0' : '#FECACA'}`
+                  }}>
+                  <div>
+                    <div className="font-bold text-xl"
+                      style={{ color: selectedFiche.manquant_regle ? '#166534' : '#E4322C' }}>
+                      {manq.toLocaleString()} FCFA
+                    </div>
+                    <div className="text-xs mt-0.5"
+                      style={{ color: selectedFiche.manquant_regle ? '#166534' : '#991B1B' }}>
+                      {selectedFiche.manquant_regle ? '✅ Manquant réglé' : '⚠️ Non réglé'}
+                    </div>
+                  </div>
+                  {!selectedFiche.manquant_regle && (
+                    <button type="button" onClick={() => confirmerManquantAdmin(selectedFiche.id)}
+                      className="px-4 py-2 rounded-xl text-sm font-semibold text-white"
+                      style={{ backgroundColor: '#2A4E94' }}>
+                      💰 Confirmer règlement
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : null
+          })()}
+
+          {/* Observations */}
+          {selectedFiche.observations && (
+            <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+              <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>OBSERVATIONS</h4>
+              <p className="text-sm" style={{ color: '#1a1a2e' }}>{selectedFiche.observations}</p>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="p-5 flex gap-3">
+            {!selectedFiche.valide_chef && (
+              <button type="button" onClick={() => validerFicheAdmin(selectedFiche.id)}
+                className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+                style={{ backgroundColor: '#166534' }}>
+                ✅ Valider la fiche
+              </button>
+            )}
+            <button type="button" onClick={() => setDeleteFicheConfirm(selectedFiche.id)}
+              className="px-4 py-3 rounded-xl text-sm font-semibold"
+              style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+              🗑️ Supprimer
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+  </div>
+)}
+
           {/* Sections à venir */}
-          {!['dashboard', 'agences', 'agents', 'objectifs'].includes(tab) && (
+          {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches'].includes(tab) && (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
                 <div className="text-5xl mb-4">🚧</div>
@@ -2014,6 +2366,30 @@ const [objectifForm, setObjectifForm] = useState({
           className="flex-1 py-3 rounded-xl text-sm font-semibold border"
           style={{ borderColor: '#e2e8f0', color: '#818387' }}>Annuler</button>
         <button type="button" onClick={() => deleteObjectif(deleteObjectifConfirm)}
+          className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+          style={{ backgroundColor: '#E4322C' }}>Supprimer</button>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* MODAL SUPPRESSION FICHE */}
+{deleteFicheConfirm && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center">
+      <div className="text-4xl mb-4">📋</div>
+      <h3 className="font-bold text-lg mb-2" style={{ color: '#1a1a2e' }}>
+        Supprimer cette fiche ?
+      </h3>
+      <p className="text-sm mb-6" style={{ color: '#818387' }}>
+        Cette action est irréversible. Toutes les données de cette fiche seront perdues.
+      </p>
+      <div className="flex gap-3">
+        <button type="button" onClick={() => setDeleteFicheConfirm(null)}
+          className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+          style={{ borderColor: '#e2e8f0', color: '#818387' }}>Annuler</button>
+        <button type="button" onClick={() => deleteFiche(deleteFicheConfirm)}
           className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
           style={{ backgroundColor: '#E4322C' }}>Supprimer</button>
       </div>
