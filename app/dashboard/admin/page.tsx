@@ -161,23 +161,32 @@ const [reglementFiche, setReglementFiche] = useState<any>(null)
 const [reglementCommentaire, setReglementCommentaire] = useState('')
 const [reglementLoading, setReglementLoading] = useState(false)
 
+// Zones agents
+const [agentZones, setAgentZones] = useState<any[]>([])
+const [agenceZonesDisponibles, setAgenceZonesDisponibles] = useState<any[]>([])
+const [showAddZoneAgentModal, setShowAddZoneAgentModal] = useState(false)
+const [agentZoneLoading, setAgentZoneLoading] = useState(false)
+
+
+
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
 
-  useEffect(() => {
-    if (tab === 'agents') loadAgentsData()
-    if (tab === 'objectifs') loadObjectifs()
-    if (tab === 'fiches') loadFiches()
-    if (tab === 'alertes') loadAlertes()
-    if (tab === 'parametres') setAdminForm({
-      nom: admin?.nom || '',
-      prenom: admin?.prenom || '',
-      telephone: admin?.telephone || '',
-    })
-    if (tab === 'equipes') loadEquipes()
-    if (tab === 'permissions') loadPermissions()
-    if (tab === 'manquants') loadManquants()
-  }, [tab])
+useEffect(() => {
+  if (tab === 'agents') loadAgentsData()
+  if (tab === 'objectifs') loadObjectifs()
+  if (tab === 'fiches') loadFiches()
+  if (tab === 'alertes') loadAlertes()
+  if (tab === 'equipes') loadEquipes()
+  if (tab === 'permissions') loadPermissions()  // ← cette ligne doit exister
+  if (tab === 'manquants') loadManquants()
+  if (tab === 'parametres') setAdminForm({
+    nom: admin?.nom || '',
+    prenom: admin?.prenom || '',
+    telephone: admin?.telephone || '',
+  })
+}, [tab])
+
   useEffect(() => { loadAll() }, [])
 
   useEffect(() => {
@@ -345,6 +354,43 @@ const [reglementLoading, setReglementLoading] = useState(false)
     setDeleteAgenceConfirm(null)
   }
 
+  async function loadAgentZones(agentId: string, agenceId: string) {
+    const { data } = await supabase
+      .from('agent_zones')
+      .select('zone_id, zones(id, numero, nom)')
+      .eq('agent_id', agentId)
+    setAgentZones(data || [])
+  
+    if (agenceId) {
+      const { data: zonesAgence } = await supabase
+        .from('zones')
+        .select('*')
+        .eq('agence_id', agenceId)
+        .order('numero')
+      setAgenceZonesDisponibles(zonesAgence || [])
+    }
+  }
+  
+  async function ajouterZoneAgent(zoneId: string) {
+    if (!selectedAgent) return
+    setAgentZoneLoading(true)
+    const { error } = await supabase.from('agent_zones').insert({
+      agent_id: selectedAgent.id,
+      zone_id: zoneId,
+    })
+    if (!error) await loadAgentZones(selectedAgent.id, selectedAgent.agence_id)
+    setAgentZoneLoading(false)
+    setShowAddZoneAgentModal(false)
+  }
+  
+  async function retirerZoneAgent(zoneId: string) {
+    if (!selectedAgent) return
+    await supabase.from('agent_zones').delete()
+      .eq('agent_id', selectedAgent.id)
+      .eq('zone_id', zoneId)
+    setAgentZones(prev => prev.filter(az => az.zone_id !== zoneId))
+  }
+
   async function loadZones(agence: any) {
     setSelectedAgenceZones(agence)
     const { data } = await supabase
@@ -409,13 +455,15 @@ const [reglementLoading, setReglementLoading] = useState(false)
   async function selectAgent(agent: any) {
     setSelectedAgent(agent)
     setAgentLoadingFiches(true)
-    const { data } = await supabase
-      .from('fiches_journalieres')
-      .select('*')
-      .eq('agent_id', agent.id)
-      .order('date', { ascending: false })
-      .limit(10)
-    setAgentFiches(data || [])
+    setAgentZones([])
+    const [fichesRes] = await Promise.all([
+      supabase.from('fiches_journalieres').select('*')
+        .eq('agent_id', agent.id)
+        .order('date', { ascending: false })
+        .limit(10),
+      loadAgentZones(agent.id, agent.agence_id),
+    ])
+    setAgentFiches(fichesRes.data || [])
     setAgentLoadingFiches(false)
   }
   
@@ -759,13 +807,52 @@ const [reglementLoading, setReglementLoading] = useState(false)
   
   async function savePermissions() {
     setPermissionsSaving(true)
-    const upserts: any[] = []
+  
+    // Test de lecture avant sauvegarde
+    console.log('Permissions à sauvegarder:', JSON.stringify(permissions, null, 2))
+  
+    // Suppression
+    const { error: deleteError } = await supabase
+      .from('role_permissions')
+      .delete()
+      .in('role', ['agent', 'chef', 'responsable', 'dg'])
+  
+    if (deleteError) {
+      console.error('❌ Erreur suppression:', deleteError)
+      alert('Erreur suppression: ' + deleteError.message)
+      setPermissionsSaving(false)
+      return
+    }
+    console.log('✅ Suppression OK')
+  
+    // Insertion
+    const inserts: any[] = []
     Object.entries(permissions).forEach(([role, perms]) => {
       Object.entries(perms).forEach(([permission, valeur]) => {
-        upserts.push({ role, permission, valeur, updated_at: new Date().toISOString() })
+        inserts.push({ role, permission, valeur })
       })
     })
-    await supabase.from('role_permissions').upsert(upserts, { onConflict: 'role,permission' })
+  
+    console.log('Lignes à insérer:', inserts.length, inserts)
+  
+    if (inserts.length > 0) {
+      const { data: insertData, error: insertError } = await supabase
+        .from('role_permissions')
+        .insert(inserts)
+        .select()
+  
+      if (insertError) {
+        console.error('❌ Erreur insertion:', insertError)
+        alert('Erreur insertion: ' + insertError.message)
+        setPermissionsSaving(false)
+        return
+      }
+      console.log('✅ Insertion OK:', insertData)
+    }
+  
+    // Recharger pour vérifier
+    await loadPermissions()
+  
     setPermissionsSaving(false)
     setPermissionsSuccess(true)
     setTimeout(() => setPermissionsSuccess(false), 3000)
@@ -1757,6 +1844,51 @@ const [reglementLoading, setReglementLoading] = useState(false)
               </div>
             )}
           </div>
+
+          {/* Zones assignées */}
+<div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+  <div className="flex items-center justify-between mb-3">
+    <h4 className="font-semibold text-xs" style={{ color: '#818387' }}>
+      ZONES ASSIGNÉES ({agentZones.length})
+    </h4>
+    <button type="button"
+      onClick={() => setShowAddZoneAgentModal(true)}
+      className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
+      style={{ backgroundColor: '#2A4E94' }}>
+      ➕ Ajouter
+    </button>
+  </div>
+
+  {agentZones.length === 0 ? (
+    <div className="text-center py-4 rounded-xl text-xs"
+      style={{ backgroundColor: '#f8fafc', color: '#818387' }}>
+      Aucune zone assignée à cet agent
+    </div>
+  ) : (
+    <div className="flex flex-wrap gap-2">
+      {agentZones.map(az => (
+        <div key={az.zone_id}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-xl"
+          style={{ backgroundColor: '#EEF2FF', border: '1px solid #C7D2FE' }}>
+          <div className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white"
+            style={{ backgroundColor: '#2A4E94' }}>
+            {az.zones?.numero}
+          </div>
+          <span className="text-xs font-medium" style={{ color: '#2A4E94' }}>
+            Zone {az.zones?.numero}
+            {az.zones?.nom ? ` — ${az.zones.nom}` : ''}
+          </span>
+          <button type="button"
+            onClick={() => retirerZoneAgent(az.zone_id)}
+            className="w-4 h-4 rounded-full flex items-center justify-center text-xs"
+            style={{ backgroundColor: '#C7D2FE', color: '#2A4E94' }}>
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
 
           {/* Historique fiches */}
           <div className="p-5">
@@ -4507,6 +4639,78 @@ const [reglementLoading, setReglementLoading] = useState(false)
             {reglementLoading ? 'Traitement...' : '✅ Confirmer le règlement'}
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* MODAL AJOUTER ZONE À UN AGENT */}
+{showAddZoneAgentModal && selectedAgent && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+      <div className="px-5 py-4 border-b flex items-center justify-between"
+        style={{ borderColor: '#f1f5f9' }}>
+        <div>
+          <h3 className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+            🗺️ Assigner une zone
+          </h3>
+          <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
+            {selectedAgent.prenom} {selectedAgent.nom} — {selectedAgent.agences?.nom}
+          </p>
+        </div>
+        <button type="button" onClick={() => setShowAddZoneAgentModal(false)}
+          className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+      </div>
+
+      <div className="p-4 overflow-y-auto" style={{ maxHeight: '400px' }}>
+        {agenceZonesDisponibles.length === 0 ? (
+          <div className="text-center py-6">
+            <div className="text-3xl mb-2">🗺️</div>
+            <div className="text-sm font-medium" style={{ color: '#1a1a2e' }}>
+              Aucune zone disponible
+            </div>
+            <div className="text-xs mt-1" style={{ color: '#818387' }}>
+              Créez d&apos;abord des zones dans l&apos;onglet Agences
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {agenceZonesDisponibles
+              .filter(z => !agentZones.find(az => az.zone_id === z.id))
+              .map(zone => (
+                <button key={zone.id} type="button"
+                  onClick={() => ajouterZoneAgent(zone.id)}
+                  disabled={agentZoneLoading}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl text-left transition-all hover:opacity-80"
+                  style={{ backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}>
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm text-white flex-shrink-0"
+                    style={{ backgroundColor: '#2A4E94' }}>
+                    {zone.numero}
+                  </div>
+                  <div>
+                    <div className="font-semibold text-sm" style={{ color: '#1a1a2e' }}>
+                      Zone {zone.numero}
+                    </div>
+                    <div className="text-xs" style={{ color: '#818387' }}>
+                      {zone.nom || selectedAgent.agences?.nom}
+                    </div>
+                  </div>
+                  <div className="ml-auto">
+                    <span className="text-xs px-2 py-1 rounded-lg font-medium"
+                      style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                      {agentZoneLoading ? '...' : '➕ Assigner'}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            {agenceZonesDisponibles.filter(z => !agentZones.find(az => az.zone_id === z.id)).length === 0 && (
+              <div className="text-center py-4 text-sm" style={{ color: '#818387' }}>
+                Toutes les zones sont déjà assignées ✅
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   </div>
