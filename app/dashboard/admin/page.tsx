@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 
-type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres' | 'equipes'
+type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres' | 'equipes' | 'permissions'
 
 export default function DashboardAdmin() {
   const router = useRouter()
@@ -131,6 +131,12 @@ const [equipeForm, setEquipeForm] = useState({
   nom: '', agence_id: '', chef_id: '', description: '', actif: true
 })
 
+// Permissions
+const [permissions, setPermissions] = useState<Record<string, Record<string, boolean>>>({})
+const [permissionsLoading, setPermissionsLoading] = useState(false)
+const [permissionsSaving, setPermissionsSaving] = useState(false)
+const [permissionsSuccess, setPermissionsSuccess] = useState(false)
+
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
 
@@ -145,6 +151,7 @@ const [equipeForm, setEquipeForm] = useState({
       telephone: admin?.telephone || '',
     })
     if (tab === 'equipes') loadEquipes()
+    if (tab === 'permissions') loadPermissions()
   }, [tab])
   useEffect(() => { loadAll() }, [])
 
@@ -648,6 +655,42 @@ const [equipeForm, setEquipeForm] = useState({
     setShowEquipeModal(true)
   }
 
+  async function loadPermissions() {
+    setPermissionsLoading(true)
+    const { data } = await supabase.from('role_permissions').select('*')
+    const matrix: Record<string, Record<string, boolean>> = {}
+    ;(data || []).forEach(p => {
+      if (!matrix[p.role]) matrix[p.role] = {}
+      matrix[p.role][p.permission] = p.valeur
+    })
+    setPermissions(matrix)
+    setPermissionsLoading(false)
+  }
+  
+  function togglePermission(role: string, permission: string) {
+    setPermissions(prev => ({
+      ...prev,
+      [role]: {
+        ...prev[role],
+        [permission]: !prev[role]?.[permission]
+      }
+    }))
+  }
+  
+  async function savePermissions() {
+    setPermissionsSaving(true)
+    const upserts: any[] = []
+    Object.entries(permissions).forEach(([role, perms]) => {
+      Object.entries(perms).forEach(([permission, valeur]) => {
+        upserts.push({ role, permission, valeur, updated_at: new Date().toISOString() })
+      })
+    })
+    await supabase.from('role_permissions').upsert(upserts, { onConflict: 'role,permission' })
+    setPermissionsSaving(false)
+    setPermissionsSuccess(true)
+    setTimeout(() => setPermissionsSuccess(false), 3000)
+  }
+
   async function loadFiches() {
     const { data } = await supabase
       .from('fiches_journalieres')
@@ -840,6 +883,7 @@ const [equipeForm, setEquipeForm] = useState({
     { key: 'fiches', label: 'Fiches', icon: '📋', active: true },
     { key: 'alertes', label: 'Alertes', icon: '⚠️', active: true },
     { key: 'parametres', label: 'Paramètres', icon: '⚙️', active: true },
+    { key: 'permissions', label: 'Permissions', icon: '🔐', active: true },
   ]
 
   if (loading) return (
@@ -915,6 +959,7 @@ const [equipeForm, setEquipeForm] = useState({
               {tab === 'alertes' && '⚠️ Alertes & Anomalies'}
               {tab === 'parametres' && '⚙️ Paramètres'}
               {tab === 'equipes' && '🤝 Gestion des Équipes'}
+              {tab === 'permissions' && '🔐 Gestion des Permissions'}
             </h1>
             <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
               PADES Microfinance — Back-office Super Admin
@@ -2703,8 +2748,190 @@ const [equipeForm, setEquipeForm] = useState({
   </div>
 )}
 
+{/* ════ PERMISSIONS ════ */}
+{tab === 'permissions' && (
+  <div className="space-y-6">
+
+    {/* Header */}
+    <div className="flex items-center justify-between">
+      <div>
+        <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+          Matrice des permissions
+        </h2>
+        <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
+          Définissez ce que chaque rôle peut faire dans l&apos;application
+        </p>
+      </div>
+      <div className="flex gap-3">
+        <button type="button" onClick={loadPermissions}
+          className="px-4 py-2 rounded-xl text-sm font-medium"
+          style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+          🔄 Actualiser
+        </button>
+        <button type="button" onClick={savePermissions} disabled={permissionsSaving}
+          className="px-4 py-2.5 rounded-xl text-white text-sm font-semibold"
+          style={{ backgroundColor: permissionsSaving ? '#818387' : '#2A4E94' }}>
+          {permissionsSaving ? 'Sauvegarde...' : '💾 Enregistrer'}
+        </button>
+      </div>
+    </div>
+
+    {/* Success */}
+    {permissionsSuccess && (
+      <div className="p-3 rounded-xl flex items-center gap-2"
+        style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+        <span>✅</span>
+        <span className="text-sm font-medium" style={{ color: '#166534' }}>
+          Permissions enregistrées avec succès
+        </span>
+      </div>
+    )}
+
+    {/* Info */}
+    <div className="p-4 rounded-2xl flex items-start gap-3"
+      style={{ backgroundColor: '#EEF2FF', border: '1px solid #C7D2FE' }}>
+      <span className="text-lg">ℹ️</span>
+      <p className="text-xs" style={{ color: '#2A4E94' }}>
+        Ces permissions servent de référence pour configurer l&apos;accès de chaque rôle.
+        Elles s&apos;appliqueront automatiquement quand les dashboards Chef, Responsable et DG seront développés.
+        <strong> L&apos;administrateur a toujours un accès complet.</strong>
+      </p>
+    </div>
+
+    {permissionsLoading ? (
+      <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center">
+        <div className="w-8 h-8 border-4 rounded-full animate-spin mx-auto mb-3"
+          style={{ borderColor: '#2A4E94', borderTopColor: 'transparent' }} />
+        <p className="text-sm" style={{ color: '#818387' }}>Chargement des permissions...</p>
+      </div>
+    ) : (
+      <div className="space-y-6">
+        {[
+          {
+            categorie: '📋 Fiches journalières',
+            permissions: [
+              { key: 'soumettre_fiche', label: 'Soumettre une fiche' },
+              { key: 'voir_ses_fiches', label: 'Voir ses propres fiches' },
+              { key: 'voir_fiches_equipe', label: 'Voir les fiches de son équipe' },
+              { key: 'valider_fiches', label: 'Valider des fiches' },
+              { key: 'voir_toutes_fiches', label: 'Voir toutes les fiches du réseau' },
+            ]
+          },
+          {
+            categorie: '👥 Agents & Équipes',
+            permissions: [
+              { key: 'voir_agents_equipe', label: 'Voir les agents de son équipe' },
+              { key: 'voir_tous_agents', label: 'Voir tous les agents' },
+            ]
+          },
+          {
+            categorie: '🎯 Objectifs',
+            permissions: [
+              { key: 'voir_ses_objectifs', label: 'Voir ses objectifs assignés' },
+              { key: 'gerer_objectifs', label: 'Créer et gérer des objectifs' },
+            ]
+          },
+          {
+            categorie: '📊 Rapports & Données',
+            permissions: [
+              { key: 'voir_classement', label: 'Voir le classement des agents' },
+              { key: 'voir_agence', label: 'Voir les données de son agence' },
+              { key: 'rapports_agence', label: 'Accéder aux rapports d\'agence' },
+              { key: 'voir_tout_reseau', label: 'Voir tout le réseau PADES' },
+              { key: 'rapports_globaux', label: 'Accéder aux rapports globaux' },
+            ]
+          },
+          {
+            categorie: '💬 Communication',
+            permissions: [
+              { key: 'messagerie', label: 'Messagerie interne' },
+            ]
+          },
+        ].map(groupe => (
+          <div key={groupe.categorie} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+            {/* Header groupe */}
+            <div className="px-5 py-3 border-b"
+              style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
+              <h3 className="font-semibold text-sm" style={{ color: '#1a1a2e' }}>
+                {groupe.categorie}
+              </h3>
+            </div>
+
+            {/* Tableau */}
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <th className="text-left px-5 py-3 text-xs font-semibold w-64"
+                      style={{ color: '#818387' }}>Permission</th>
+                    {[
+                      { key: 'agent', label: '👤 Agent', color: '#2A4E94', bg: '#EEF2FF' },
+                      { key: 'chef', label: '👨‍💼 Chef', color: '#166534', bg: '#F0FDF4' },
+                      { key: 'responsable', label: '🏦 Responsable', color: '#854D0E', bg: '#FEF9C3' },
+                      { key: 'dg', label: '⭐ DG', color: '#5B21B6', bg: '#F5F3FF' },
+                    ].map(role => (
+                      <th key={role.key} className="px-5 py-3 text-center">
+                        <span className="text-xs font-semibold px-3 py-1 rounded-full"
+                          style={{ backgroundColor: role.bg, color: role.color }}>
+                          {role.label}
+                        </span>
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupe.permissions.map((perm, i, arr) => (
+                    <tr key={perm.key}
+                      style={{ borderBottom: i < arr.length - 1 ? '1px solid #f8fafc' : 'none' }}>
+                      <td className="px-5 py-4">
+                        <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                          {perm.label}
+                        </div>
+                        <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
+                          {perm.key}
+                        </div>
+                      </td>
+                      {['agent', 'chef', 'responsable', 'dg'].map(role => {
+                        const active = permissions[role]?.[perm.key] ?? false
+                        return (
+                          <td key={role} className="px-5 py-4 text-center">
+                            <button type="button"
+                              onClick={() => togglePermission(role, perm.key)}
+                              className="relative w-11 h-6 rounded-full transition-all mx-auto flex-shrink-0"
+                              style={{ backgroundColor: active ? '#2A4E94' : '#e2e8f0' }}>
+                              <div className="absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm"
+                                style={{ left: active ? '23px' : '2px' }} />
+                            </button>
+                            <div className="text-xs mt-1 font-medium"
+                              style={{ color: active ? '#166534' : '#991B1B' }}>
+                              {active ? 'Oui' : 'Non'}
+                            </div>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+
+        {/* Bouton save bas de page */}
+        <div className="flex justify-end">
+          <button type="button" onClick={savePermissions} disabled={permissionsSaving}
+            className="px-8 py-3 rounded-xl text-white text-sm font-semibold"
+            style={{ backgroundColor: permissionsSaving ? '#818387' : '#2A4E94' }}>
+            {permissionsSaving ? 'Sauvegarde...' : '💾 Enregistrer toutes les permissions'}
+          </button>
+        </div>
+      </div>
+    )}
+  </div>
+)}
+
           {/* Sections à venir */}
-          {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches', 'alertes', 'parametres', 'equipes'].includes(tab) && (
+          {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches', 'alertes', 'parametres', 'equipes', 'permissions'].includes(tab) && (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
                 <div className="text-5xl mb-4">🚧</div>
