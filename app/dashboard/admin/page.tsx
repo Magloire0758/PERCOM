@@ -105,6 +105,12 @@ const [deleteFicheConfirm, setDeleteFicheConfirm] = useState<string | null>(null
 const [alertesData, setAlertesData] = useState<any[]>([])
 const [alertesLoading, setAlertesLoading] = useState(false)
 
+//modale de validation de fiche 
+const [showValidationModal, setShowValidationModal] = useState(false)
+const [validationFiche, setValidationFiche] = useState<any>(null)
+const [validationStatut, setValidationStatut] = useState('validee')
+const [validationCommentaire, setValidationCommentaire] = useState('')
+
 // Paramètres
 const [adminForm, setAdminForm] = useState({ nom: '', prenom: '', telephone: '' })
 const [adminSaving, setAdminSaving] = useState(false)
@@ -528,10 +534,46 @@ const [adminSuccess, setAdminSuccess] = useState(false)
     setFiches(data || [])
   }
   
-  async function validerFicheAdmin(ficheId: string) {
-    await supabase.from('fiches_journalieres').update({ valide_chef: true }).eq('id', ficheId)
-    setFiches(prev => prev.map(f => f.id === ficheId ? { ...f, valide_chef: true } : f))
-    if (selectedFiche?.id === ficheId) setSelectedFiche((p: any) => ({ ...p, valide_chef: true }))
+  async function validerFicheAdmin(ficheId: string, statut: string, commentaire?: string) {
+    const { data: agentData } = await supabase
+      .from('agents').select('id').eq('user_id', (await supabase.auth.getUser()).data.user?.id || '').single()
+  
+    await supabase.from('fiches_journalieres').update({
+      valide_chef: statut === 'validee',
+      statut_validation: statut,
+      commentaire_chef: commentaire || null,
+      valide_par: agentData?.id || null,
+    }).eq('id', ficheId)
+  
+    // Notification automatique à l'agent
+    const fiche = fiches.find(f => f.id === ficheId)
+    if (fiche) {
+      const titres: Record<string, string> = {
+        validee: '✅ Fiche validée',
+        rejetee: '❌ Fiche rejetée',
+        a_corriger: '🔄 Fiche à corriger',
+      }
+      const messages: Record<string, string> = {
+        validee: `Votre fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')} a été validée.`,
+        rejetee: `Votre fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')} a été rejetée.${commentaire ? ` Motif: ${commentaire}` : ''}`,
+        a_corriger: `Votre fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')} nécessite des corrections.${commentaire ? ` Note: ${commentaire}` : ''}`,
+      }
+      await supabase.from('notifications').insert({
+        agent_id: fiche.agent_id,
+        type: statut === 'validee' ? 'validation' : statut === 'rejetee' ? 'rejet' : 'correction',
+        titre: titres[statut],
+        message: messages[statut],
+      })
+    }
+  
+    setFiches(prev => prev.map(f => f.id === ficheId ? {
+      ...f, valide_chef: statut === 'validee',
+      statut_validation: statut, commentaire_chef: commentaire || null
+    } : f))
+    if (selectedFiche?.id === ficheId) setSelectedFiche((p: any) => ({
+      ...p, valide_chef: statut === 'validee',
+      statut_validation: statut, commentaire_chef: commentaire || null
+    }))
   }
   
   async function confirmerManquantAdmin(ficheId: string) {
@@ -805,8 +847,8 @@ const [adminSuccess, setAdminSuccess] = useState(false)
                 {[
                   { label: 'Total agents', value: stats.totalAgents, icon: '👥', color: '#2A4E94', bg: '#EEF2FF', sub: 'Actifs sur la plateforme' },
                   { label: 'Total agences', value: stats.totalAgences, icon: '🏦', color: '#166534', bg: '#F0FDF4', sub: 'Réseau PADES' },
-                  { label: "Collecté aujourd'hui", value: stats.collecteAujourdhui.toLocaleString() + ' F', icon: '💰', color: '#854D0E', bg: '#FEF9C3', sub: 'Toutes agences' },
-                  { label: 'Collecté ce mois', value: stats.collecteMois.toLocaleString() + ' F', icon: '📈', color: '#991B1B', bg: '#FEF2F2', sub: new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) },
+                  { label: "Collecté aujourd'hui", value: stats.collecteAujourdhui.toLocaleString() + ' Fcfa', icon: '💰', color: '#854D0E', bg: '#FEF9C3', sub: 'Toutes agences' },
+                  { label: 'Collecté ce mois', value: stats.collecteMois.toLocaleString() + ' Fcfa', icon: '📈', color: '#991B1B', bg: '#FEF2F2', sub: new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) },
                 ].map(s => (
                   <div key={s.label} className="bg-white rounded-2xl p-5 border border-gray-100">
                     <div className="flex items-start justify-between mb-3">
@@ -1737,8 +1779,10 @@ const [adminSuccess, setAdminSuccess] = useState(false)
             className="px-3 py-2 rounded-xl border text-xs outline-none"
             style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
             <option value="tous">Tous les statuts</option>
-            <option value="validee">Validée</option>
-            <option value="en_attente">En attente</option>
+            <option value="validee">✅ Validée</option>
+            <option value="rejetee">❌ Rejetée</option>
+            <option value="a_corriger">🔄 À corriger</option>
+            <option value="en_attente">⏳ En attente</option>
           </select>
           <select value={ficheFilterManquant} onChange={e => setFicheFilterManquant(e.target.value)}
             className="px-3 py-2 rounded-xl border text-xs outline-none"
@@ -1775,7 +1819,7 @@ const [adminSuccess, setAdminSuccess] = useState(false)
                 .filter(f => {
                   const ms = ficheSearch === '' || `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(ficheSearch.toLowerCase())
                   const ma = ficheFilterAgence === 'tous' || f.agents?.agence_id === ficheFilterAgence
-                  const mst = ficheFilterStatut === 'tous' || (ficheFilterStatut === 'validee' ? f.valide_chef : !f.valide_chef)
+                  const mst = ficheFilterStatut === 'tous' || f.statut_validation === ficheFilterStatut
                   const md = ficheFilterDate === '' || f.date === ficheFilterDate
                   const manq = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
                   const mm = ficheFilterManquant === 'tous' ||
@@ -1840,21 +1884,36 @@ const [adminSuccess, setAdminSuccess] = useState(false)
                         )}
                       </td>
                       <td className="px-3 py-3">
-                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                          style={{
-                            backgroundColor: f.valide_chef ? '#DCFCE7' : '#FEF9C3',
-                            color: f.valide_chef ? '#166534' : '#854D0E'
-                          }}>
-                          {f.valide_chef ? '✅ Validée' : '⏳ Attente'}
-                        </span>
-                      </td>
+                      <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                        style={{
+                          backgroundColor:
+                            f.statut_validation === 'validee' ? '#DCFCE7' :
+                            f.statut_validation === 'rejetee' ? '#FEE2E2' :
+                            f.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF',
+                          color:
+                            f.statut_validation === 'validee' ? '#166534' :
+                            f.statut_validation === 'rejetee' ? '#991B1B' :
+                            f.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94'
+                        }}>
+                        {f.statut_validation === 'validee' ? '✅ Validée' :
+                        f.statut_validation === 'rejetee' ? '❌ Rejetée' :
+                        f.statut_validation === 'a_corriger' ? '🔄 À corriger' : '⏳ En attente'}
+                      </span>
+                    </td>
                       <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
                         <div className="flex gap-1">
-                          {!f.valide_chef && (
-                            <button type="button" onClick={() => validerFicheAdmin(f.id)}
-                              className="p-1.5 rounded-lg" title="Valider"
-                              style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>✅</button>
-                          )}
+                        {!f.valide_chef && (
+                        <button type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setValidationFiche(f)
+                            setValidationStatut('validee')
+                            setValidationCommentaire('')
+                            setShowValidationModal(true)
+                          }}
+                          className="p-1.5 rounded-lg" title="Valider"
+                          style={{ backgroundColor: '#F0FDF4', color: '#166634' }}>✅</button>
+                      )}
                           {manq > 0 && !f.manquant_regle && (
                             <button type="button" onClick={() => confirmerManquantAdmin(f.id)}
                               className="p-1.5 rounded-lg" title="Confirmer manquant réglé"
@@ -1965,27 +2024,72 @@ const [adminSuccess, setAdminSuccess] = useState(false)
             ) : null
           })()}
 
-          {/* Observations */}
-          {selectedFiche.observations && (
-            <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-              <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>OBSERVATIONS</h4>
-              <p className="text-sm" style={{ color: '#1a1a2e' }}>{selectedFiche.observations}</p>
-            </div>
-          )}
+        {/* Observations */}
+        {selectedFiche.observations && (
+          <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+            <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>OBSERVATIONS</h4>
+            <p className="text-sm" style={{ color: '#1a1a2e' }}>{selectedFiche.observations}</p>
+          </div>
+        )}
 
+        {/* Commentaire chef */}
+        {selectedFiche.commentaire_chef && (
+          <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+            <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>COMMENTAIRE CHEF</h4>
+            <div className="rounded-xl p-3 flex items-start gap-3"
+              style={{
+                backgroundColor:
+                  selectedFiche.statut_validation === 'validee' ? '#F0FDF4' :
+                  selectedFiche.statut_validation === 'rejetee' ? '#FEF2F2' : '#FEF9C3',
+                border: `1px solid ${
+                  selectedFiche.statut_validation === 'validee' ? '#BBF7D0' :
+                  selectedFiche.statut_validation === 'rejetee' ? '#FECACA' : '#FDE68A'}`
+              }}>
+              <span className="text-base flex-shrink-0">
+                {selectedFiche.statut_validation === 'validee' ? '✅' :
+                selectedFiche.statut_validation === 'rejetee' ? '❌' : '🔄'}
+              </span>
+              <p className="text-sm"
+                style={{
+                  color:
+                    selectedFiche.statut_validation === 'validee' ? '#166534' :
+                    selectedFiche.statut_validation === 'rejetee' ? '#991B1B' : '#854D0E'
+                }}>
+                {selectedFiche.commentaire_chef}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Heure de soumission */}
+        {selectedFiche.heure_soumission && (
+          <div className="px-5 py-2 border-b" style={{ borderColor: '#f1f5f9' }}>
+            <span className="text-xs" style={{ color: '#818387' }}>
+              🕐 Soumise le {new Date(selectedFiche.heure_soumission).toLocaleDateString('fr-FR', {
+                day: 'numeric', month: 'long', year: 'numeric'
+              })} à {new Date(selectedFiche.heure_soumission).toLocaleTimeString('fr-FR', {
+                hour: '2-digit', minute: '2-digit'
+              })}
+            </span>
+          </div>
+        )}
           {/* Actions */}
           <div className="p-5 flex gap-3">
-            {!selectedFiche.valide_chef && (
-              <button type="button" onClick={() => validerFicheAdmin(selectedFiche.id)}
-                className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
-                style={{ backgroundColor: '#166534' }}>
-                ✅ Valider la fiche
-              </button>
-            )}
+            <button type="button"
+              onClick={() => {
+                setValidationFiche(selectedFiche)
+                setValidationStatut('validee')
+                setValidationCommentaire('')
+                setShowValidationModal(true)
+              }}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+              style={{ backgroundColor: '#166534' }}>
+              ✅ Valider / Décision
+            </button>
             <button type="button" onClick={() => setDeleteFicheConfirm(selectedFiche.id)}
               className="px-4 py-3 rounded-xl text-sm font-semibold"
               style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
-              🗑️ Supprimer
+              🗑️
             </button>
           </div>
         </div>
@@ -2763,6 +2867,115 @@ const [adminSuccess, setAdminSuccess] = useState(false)
         <button type="button" onClick={() => deleteFiche(deleteFicheConfirm)}
           className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
           style={{ backgroundColor: '#E4322C' }}>Supprimer</button>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* MODAL VALIDATION FICHE */}
+{showValidationModal && validationFiche && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+      <div className="px-6 py-4 border-b flex items-center justify-between"
+        style={{ borderColor: '#f1f5f9' }}>
+        <h3 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>
+          📋 Décision sur la fiche
+        </h3>
+        <button type="button" onClick={() => setShowValidationModal(false)}
+          className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+      </div>
+
+      <div className="p-6 space-y-5">
+        {/* Info fiche */}
+        <div className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
+          <div className="text-xs font-semibold" style={{ color: '#1a1a2e' }}>
+            {validationFiche.agents?.prenom} {validationFiche.agents?.nom}
+          </div>
+          <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
+            Fiche du {new Date(validationFiche.date).toLocaleDateString('fr-FR', {
+              weekday: 'long', day: 'numeric', month: 'long'
+            })}
+          </div>
+          <div className="text-xs mt-1" style={{ color: '#2A4E94' }}>
+            {(validationFiche.montant_mobilise || 0).toLocaleString()} FCFA collectés
+          </div>
+        </div>
+
+        {/* Choix statut */}
+        <div>
+          <label className="block text-xs font-semibold mb-3" style={{ color: '#1a1a2e' }}>
+            Décision *
+          </label>
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { key: 'validee', label: '✅ Valider', bg: '#F0FDF4', color: '#166534', activeBg: '#166534' },
+              { key: 'rejetee', label: '❌ Rejeter', bg: '#FEF2F2', color: '#991B1B', activeBg: '#991B1B' },
+              { key: 'a_corriger', label: '🔄 Corriger', bg: '#FEF9C3', color: '#854D0E', activeBg: '#854D0E' },
+            ].map(s => (
+              <button key={s.key} type="button"
+                onClick={() => setValidationStatut(s.key)}
+                className="py-3 rounded-xl text-xs font-semibold transition-all"
+                style={{
+                  backgroundColor: validationStatut === s.key ? s.activeBg : s.bg,
+                  color: validationStatut === s.key ? 'white' : s.color,
+                  border: `2px solid ${validationStatut === s.key ? s.activeBg : 'transparent'}`
+                }}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Commentaire */}
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+            Commentaire {validationStatut !== 'validee' ? '*' : '(optionnel)'}
+          </label>
+          <textarea
+            value={validationCommentaire}
+            onChange={e => setValidationCommentaire(e.target.value)}
+            rows={3}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none resize-none"
+            style={{ borderColor: '#e2e8f0' }}
+            placeholder={
+              validationStatut === 'validee' ? 'Bravo pour cette fiche ! (optionnel)' :
+              validationStatut === 'rejetee' ? 'Expliquez le motif du rejet...' :
+              'Indiquez ce qui doit être corrigé...'
+            } />
+        </div>
+
+        {/* Info notification */}
+        <div className="rounded-xl p-3 flex items-center gap-2"
+          style={{ backgroundColor: '#EEF2FF' }}>
+          <span className="text-sm">🔔</span>
+          <p className="text-xs" style={{ color: '#2A4E94' }}>
+            L&apos;agent recevra automatiquement une notification avec votre décision.
+          </p>
+        </div>
+
+        {/* Boutons */}
+        <div className="flex gap-3">
+          <button type="button" onClick={() => setShowValidationModal(false)}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+            style={{ borderColor: '#e2e8f0', color: '#818387' }}>
+            Annuler
+          </button>
+          <button type="button"
+            onClick={async () => {
+              await validerFicheAdmin(validationFiche.id, validationStatut, validationCommentaire)
+              setShowValidationModal(false)
+              setValidationCommentaire('')
+            }}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+            style={{
+              backgroundColor:
+                validationStatut === 'validee' ? '#166534' :
+                validationStatut === 'rejetee' ? '#991B1B' : '#854D0E'
+            }}>
+            Confirmer la décision
+          </button>
+        </div>
       </div>
     </div>
   </div>
