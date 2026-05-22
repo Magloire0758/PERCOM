@@ -167,7 +167,11 @@ const [agenceZonesDisponibles, setAgenceZonesDisponibles] = useState<any[]>([])
 const [showAddZoneAgentModal, setShowAddZoneAgentModal] = useState(false)
 const [agentZoneLoading, setAgentZoneLoading] = useState(false)
 
-
+// Zones équipes
+const [equipeZones, setEquipeZones] = useState<any[]>([])
+const [agenceZonesEquipe, setAgenceZonesEquipe] = useState<any[]>([])
+const [showAddZoneEquipeModal, setShowAddZoneEquipeModal] = useState(false)
+const [equipeZoneLoading, setEquipeZoneLoading] = useState(false)
 
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
@@ -389,6 +393,43 @@ useEffect(() => {
       .eq('agent_id', selectedAgent.id)
       .eq('zone_id', zoneId)
     setAgentZones(prev => prev.filter(az => az.zone_id !== zoneId))
+  }
+
+  async function loadEquipeZones(equipeId: string, agenceId: string) {
+    const { data } = await supabase
+      .from('equipe_zones')
+      .select('zone_id, zones(id, numero, nom)')
+      .eq('equipe_id', equipeId)
+    setEquipeZones(data || [])
+  
+    if (agenceId) {
+      const { data: zonesAgence } = await supabase
+        .from('zones')
+        .select('*')
+        .eq('agence_id', agenceId)
+        .order('numero')
+      setAgenceZonesEquipe(zonesAgence || [])
+    }
+  }
+  
+  async function ajouterZoneEquipe(zoneId: string) {
+    if (!selectedEquipe) return
+    setEquipeZoneLoading(true)
+    const { error } = await supabase.from('equipe_zones').insert({
+      equipe_id: selectedEquipe.id,
+      zone_id: zoneId,
+    })
+    if (!error) await loadEquipeZones(selectedEquipe.id, selectedEquipe.agence_id)
+    setEquipeZoneLoading(false)
+    setShowAddZoneEquipeModal(false)
+  }
+  
+  async function retirerZoneEquipe(zoneId: string) {
+    if (!selectedEquipe) return
+    await supabase.from('equipe_zones').delete()
+      .eq('equipe_id', selectedEquipe.id)
+      .eq('zone_id', zoneId)
+    setEquipeZones(prev => prev.filter(ez => ez.zone_id !== zoneId))
   }
 
   async function loadZones(agence: any) {
@@ -639,12 +680,14 @@ useEffect(() => {
   
   async function selectEquipe(equipe: any) {
     setSelectedEquipe(equipe)
+    setEquipeZones([])
     const { data } = await supabase
       .from('agents')
       .select('*, agences(nom)')
       .eq('equipe_id', equipe.id)
       .neq('role', 'admin')
     setEquipeMembers(data || [])
+    await loadEquipeZones(equipe.id, equipe.agence_id)
   }
   
   async function saveEquipe(e: React.FormEvent) {
@@ -3006,6 +3049,53 @@ useEffect(() => {
               </div>
             )}
           </div>
+
+          {/* Zones de l'équipe */}
+<div className="p-5 border-t" style={{ borderColor: '#f1f5f9' }}>
+  <div className="flex items-center justify-between mb-3">
+    <h4 className="font-semibold text-xs" style={{ color: '#818387' }}>
+      ZONES DE L&apos;ÉQUIPE ({equipeZones.length})
+    </h4>
+    <button type="button"
+      onClick={() => setShowAddZoneEquipeModal(true)}
+      className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
+      style={{ backgroundColor: '#2A4E94' }}>
+      ➕ Assigner
+    </button>
+  </div>
+
+  {equipeZones.length === 0 ? (
+    <div className="text-center py-4 rounded-xl text-xs"
+      style={{ backgroundColor: '#f8fafc', color: '#818387' }}>
+      Aucune zone assignée à cette équipe
+    </div>
+  ) : (
+    <div className="flex flex-wrap gap-2">
+      {equipeZones.map(ez => (
+        <div key={ez.zone_id}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-xl"
+          style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+          <div className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white"
+            style={{ backgroundColor: '#166534' }}>
+            {ez.zones?.numero}
+          </div>
+          <span className="text-xs font-medium" style={{ color: '#166534' }}>
+            Zone {ez.zones?.numero}
+            {ez.zones?.nom ? ` — ${ez.zones.nom}` : ''}
+          </span>
+          <button type="button"
+            onClick={() => retirerZoneEquipe(ez.zone_id)}
+            className="w-4 h-4 rounded-full flex items-center justify-center text-xs"
+            style={{ backgroundColor: '#BBF7D0', color: '#166534' }}>
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
+
+
         </div>
       </div>
     )}
@@ -3111,6 +3201,17 @@ useEffect(() => {
               { key: 'messagerie', label: 'Messagerie interne' },
             ]
           },
+          {
+            categorie: '🗺️ Zones',
+            permissions: [
+              { key: 'affecter_zones', label: 'Affecter agents et équipes aux zones' },
+              { key: 'gerer_zones', label: 'Créer, modifier et supprimer des zones' },
+            ]
+          },
+
+          
+
+
         ].map(groupe => (
           <div key={groupe.categorie} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
             {/* Header groupe */}
@@ -4705,6 +4806,79 @@ useEffect(() => {
                 </button>
               ))}
             {agenceZonesDisponibles.filter(z => !agentZones.find(az => az.zone_id === z.id)).length === 0 && (
+              <div className="text-center py-4 text-sm" style={{ color: '#818387' }}>
+                Toutes les zones sont déjà assignées ✅
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  </div>
+)}
+
+{/* MODAL AJOUTER ZONE À UNE ÉQUIPE */}
+{showAddZoneEquipeModal && selectedEquipe && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden">
+      <div className="px-5 py-4 border-b flex items-center justify-between"
+        style={{ borderColor: '#f1f5f9' }}>
+        <div>
+          <h3 className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+            🗺️ Assigner une zone
+          </h3>
+          <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
+            {selectedEquipe.nom} — {selectedEquipe.agences?.nom}
+          </p>
+        </div>
+        <button type="button" onClick={() => setShowAddZoneEquipeModal(false)}
+          className="p-2 rounded-lg"
+          style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+      </div>
+
+      <div className="p-4 overflow-y-auto" style={{ maxHeight: '400px' }}>
+        {agenceZonesEquipe.length === 0 ? (
+          <div className="text-center py-6">
+            <div className="text-3xl mb-2">🗺️</div>
+            <div className="text-sm font-medium" style={{ color: '#1a1a2e' }}>
+              Aucune zone disponible
+            </div>
+            <div className="text-xs mt-1" style={{ color: '#818387' }}>
+              Créez d&apos;abord des zones dans l&apos;onglet Agences
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {agenceZonesEquipe
+              .filter(z => !equipeZones.find(ez => ez.zone_id === z.id))
+              .map(zone => (
+                <button key={zone.id} type="button"
+                  onClick={() => ajouterZoneEquipe(zone.id)}
+                  disabled={equipeZoneLoading}
+                  className="w-full flex items-center gap-3 p-3 rounded-xl text-left transition-all hover:opacity-80"
+                  style={{ backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}>
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm text-white flex-shrink-0"
+                    style={{ backgroundColor: '#166534' }}>
+                    {zone.numero}
+                  </div>
+                  <div>
+                    <div className="font-semibold text-sm" style={{ color: '#1a1a2e' }}>
+                      Zone {zone.numero}
+                    </div>
+                    <div className="text-xs" style={{ color: '#818387' }}>
+                      {zone.nom || selectedEquipe.agences?.nom}
+                    </div>
+                  </div>
+                  <div className="ml-auto">
+                    <span className="text-xs px-2 py-1 rounded-lg font-medium"
+                      style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
+                      {equipeZoneLoading ? '...' : '➕ Assigner'}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            {agenceZonesEquipe.filter(z => !equipeZones.find(ez => ez.zone_id === z.id)).length === 0 && (
               <div className="text-center py-4 text-sm" style={{ color: '#818387' }}>
                 Toutes les zones sont déjà assignées ✅
               </div>

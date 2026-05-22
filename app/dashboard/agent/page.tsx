@@ -45,6 +45,8 @@ export default function DashboardAgent() {
     notif_objectif: true, notif_message: true,
   })
 
+  const [mesZones, setMesZones] = useState<any[]>([])
+
   const today = new Date().toISOString().split('T')[0]
 
   // Online/offline
@@ -106,6 +108,7 @@ export default function DashboardAgent() {
       loadNotifications(a.id),
       loadMessages(a.id),
       loadClassement(a),
+      loadMesZones(a.id),
     ])
     setLoading(false)
   }
@@ -150,6 +153,14 @@ export default function DashboardAgent() {
         .neq('id', agentId)
       setContacts(conts || [])
     }
+  }
+
+  async function loadMesZones(agentId: string) {
+    const { data } = await supabase
+      .from('agent_zones')
+      .select('zone_id, zones(id, numero, nom, agences(nom))')
+      .eq('agent_id', agentId)
+    setMesZones(data || [])
   }
 
   async function loadClassement(a: any) {
@@ -402,6 +413,8 @@ export default function DashboardAgent() {
                 </div>
               </div>
 
+              
+
               {/* Score du mois */}
               <div className="grid grid-cols-3 gap-3">
                 {[
@@ -429,6 +442,59 @@ export default function DashboardAgent() {
                 </div>
               )}
             </div>
+
+            {/* Équipe + Zones */}
+<div className="grid grid-cols-2 gap-3">
+
+{/* Badge équipe */}
+<div className="rounded-2xl p-4 flex items-center gap-3"
+  style={{ backgroundColor: card, border: `1px solid ${border}` }}>
+  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+    style={{ backgroundColor: '#EEF2FF' }}>👥</div>
+  <div>
+    <div className="text-xs" style={{ color: sub }}>Mon équipe</div>
+    {agent?.equipes?.nom ? (
+      <div className="font-bold text-sm mt-0.5" style={{ color: '#2A4E94' }}>
+        {agent.equipes.nom}
+      </div>
+    ) : (
+      <div className="text-xs mt-0.5 italic" style={{ color: sub }}>
+        Non affecté
+      </div>
+    )}
+    {agent?.equipes?.nom && (
+      <span className="text-xs px-2 py-0.5 rounded-full font-semibold mt-1 inline-block"
+        style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+        En équipe ✅
+      </span>
+    )}
+  </div>
+</div>
+
+{/* Zones assignées */}
+<div className="rounded-2xl p-4 flex items-start gap-3"
+  style={{ backgroundColor: card, border: `1px solid ${border}` }}>
+  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+    style={{ backgroundColor: '#F0FDF4' }}>🗺️</div>
+  <div className="flex-1">
+    <div className="text-xs mb-1" style={{ color: sub }}>Mes zones</div>
+    {mesZones.length === 0 ? (
+      <div className="text-xs italic" style={{ color: sub }}>Aucune zone</div>
+    ) : (
+      <div className="flex flex-wrap gap-1">
+        {mesZones.map(az => (
+          <span key={az.zone_id}
+            className="text-xs px-2 py-0.5 rounded-full font-semibold"
+            style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
+            Z{az.zones?.numero}
+          </span>
+        ))}
+      </div>
+    )}
+  </div>
+</div>
+
+</div>
 
             {/* Alerte manquants */}
             {totalManquants > 0 && (
