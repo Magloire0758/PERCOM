@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 
-type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres' | 'equipes' | 'permissions'
+type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres' | 'equipes' | 'permissions' | 'manquants'
 
 export default function DashboardAdmin() {
   const router = useRouter()
@@ -148,6 +148,19 @@ const [createUserForm, setCreateUserForm] = useState({
   telephone: '', role: 'agent', agence_id: '', equipe_id: ''
 })
 
+// Manquants
+const [manquants, setManquants] = useState<any[]>([])
+const [manquantSearch, setManquantSearch] = useState('')
+const [manquantFilterAgence, setManquantFilterAgence] = useState('tous')
+const [manquantFilterStatut, setManquantFilterStatut] = useState('non_regle')
+const [manquantFilterDateDebut, setManquantFilterDateDebut] = useState('')
+const [manquantFilterDateFin, setManquantFilterDateFin] = useState('')
+const [selectedManquant, setSelectedManquant] = useState<any>(null)
+const [showReglementModal, setShowReglementModal] = useState(false)
+const [reglementFiche, setReglementFiche] = useState<any>(null)
+const [reglementCommentaire, setReglementCommentaire] = useState('')
+const [reglementLoading, setReglementLoading] = useState(false)
+
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
 
@@ -163,6 +176,7 @@ const [createUserForm, setCreateUserForm] = useState({
     })
     if (tab === 'equipes') loadEquipes()
     if (tab === 'permissions') loadPermissions()
+    if (tab === 'manquants') loadManquants()
   }, [tab])
   useEffect(() => { loadAll() }, [])
 
@@ -757,6 +771,50 @@ const [createUserForm, setCreateUserForm] = useState({
     setTimeout(() => setPermissionsSuccess(false), 3000)
   }
 
+  async function loadManquants() {
+    const { data } = await supabase
+      .from('fiches_journalieres')
+      .select('*, agents!inner(nom, prenom, agence_id, telephone, agences(nom))')
+      .order('date', { ascending: false })
+    
+    const avecManquant = (data || []).filter(f =>
+      Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0
+    )
+    setManquants(avecManquant)
+  }
+  
+  async function confirmerReglement(ficheId: string, commentaire?: string) {
+    setReglementLoading(true)
+    await supabase.from('fiches_journalieres').update({
+      manquant_regle: true,
+      manquant_regle_at: new Date().toISOString(),
+      manquant_regle_par: admin?.id || null,
+      commentaire_chef: commentaire || null,
+    }).eq('id', ficheId)
+  
+    // Notification à l'agent
+    const fiche = manquants.find(f => f.id === ficheId)
+    if (fiche) {
+      const montant = Math.max(0, (fiche.montant_mobilise || 0) - (fiche.montant_rapporte || 0))
+      await supabase.from('notifications').insert({
+        agent_id: fiche.agent_id,
+        type: 'validation',
+        titre: '✅ Manquant réglé',
+        message: `Votre manquant de ${montant.toLocaleString()} FCFA (fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')}) a été confirmé comme réglé.${commentaire ? ` Note: ${commentaire}` : ''}`,
+      })
+    }
+  
+    setManquants(prev => prev.map(f => f.id === ficheId
+      ? { ...f, manquant_regle: true, manquant_regle_at: new Date().toISOString() } : f))
+    if (selectedManquant?.id === ficheId)
+      setSelectedManquant((p: any) => ({ ...p, manquant_regle: true }))
+  
+    setShowReglementModal(false)
+    setReglementCommentaire('')
+    setReglementLoading(false)
+    loadStats()
+  }
+
   async function loadFiches() {
     const { data } = await supabase
       .from('fiches_journalieres')
@@ -950,6 +1008,7 @@ const [createUserForm, setCreateUserForm] = useState({
     { key: 'alertes', label: 'Alertes', icon: '⚠️', active: true },
     { key: 'parametres', label: 'Paramètres', icon: '⚙️', active: true },
     { key: 'permissions', label: 'Permissions', icon: '🔐', active: true },
+    { key: 'manquants', label: 'Manquants', icon: '🚨', active: true },
   ]
 
   if (loading) return (
@@ -1022,6 +1081,7 @@ const [createUserForm, setCreateUserForm] = useState({
               {tab === 'agents' && '👥 Gestion des Agents'}
               {tab === 'objectifs' && '🎯 Gestion des Objectifs'}
               {tab === 'fiches' && '📋 Gestion des Fiches'} 
+              {tab === 'manquants' && '🚨 Gestion des Manquants'}
               {tab === 'alertes' && '⚠️ Alertes & Anomalies'}
               {tab === 'parametres' && '⚙️ Paramètres'}
               {tab === 'equipes' && '🤝 Gestion des Équipes'}
@@ -3002,8 +3062,314 @@ const [createUserForm, setCreateUserForm] = useState({
   </div>
 )}
 
+{/* ════ MANQUANTS ════ */}
+{tab === 'manquants' && (
+  <div className="flex gap-4">
+
+    {/* Liste */}
+    <div className={`flex flex-col space-y-4 transition-all ${selectedManquant ? 'w-1/2' : 'w-full'}`}>
+
+      {/* Stats globales */}
+      {(() => {
+        const total = manquants.reduce((s, f) =>
+          s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
+        const nonRegle = manquants.filter(f => !f.manquant_regle)
+        const regle = manquants.filter(f => f.manquant_regle)
+        const totalNonRegle = nonRegle.reduce((s, f) =>
+          s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
+        const totalRegle = regle.reduce((s, f) =>
+          s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
+
+        return (
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { label: 'Total manquants', value: total.toLocaleString() + ' F', bg: '#EEF2FF', color: '#2A4E94', icon: '💰' },
+              { label: 'Non réglés', value: totalNonRegle.toLocaleString() + ' F', bg: '#FEF2F2', color: '#991B1B', icon: '🚨' },
+              { label: 'Réglés', value: totalRegle.toLocaleString() + ' F', bg: '#F0FDF4', color: '#166534', icon: '✅' },
+              { label: 'Fiches concernées', value: manquants.length, bg: '#FEF9C3', color: '#854D0E', icon: '📋' },
+            ].map(s => (
+              <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xl">{s.icon}</span>
+                  <span className="text-xs" style={{ color: '#818387' }}>{s.label}</span>
+                </div>
+                <div className="font-bold text-lg" style={{ color: s.color }}>{s.value}</div>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
+
+      {/* Filtres */}
+      <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3">
+        <div className="relative">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <svg className="w-4 h-4" style={{ color: '#818387' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          <input type="text" placeholder="Rechercher par agent..."
+            value={manquantSearch} onChange={e => setManquantSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 rounded-xl border text-sm outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <select value={manquantFilterAgence} onChange={e => setManquantFilterAgence(e.target.value)}
+            className="px-3 py-2 rounded-xl border text-xs outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+            <option value="tous">Toutes les agences</option>
+            {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
+          </select>
+          <select value={manquantFilterStatut} onChange={e => setManquantFilterStatut(e.target.value)}
+            className="px-3 py-2 rounded-xl border text-xs outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+            <option value="tous">Tous les statuts</option>
+            <option value="non_regle">⚠️ Non réglés</option>
+            <option value="regle">✅ Réglés</option>
+          </select>
+          <input type="date" value={manquantFilterDateDebut}
+            onChange={e => setManquantFilterDateDebut(e.target.value)}
+            className="px-3 py-2 rounded-xl border text-xs outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+          <input type="date" value={manquantFilterDateFin}
+            onChange={e => setManquantFilterDateFin(e.target.value)}
+            className="px-3 py-2 rounded-xl border text-xs outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+          {(manquantSearch || manquantFilterAgence !== 'tous' || manquantFilterStatut !== 'tous' || manquantFilterDateDebut || manquantFilterDateFin) && (
+            <button type="button"
+              onClick={() => {
+                setManquantSearch('')
+                setManquantFilterAgence('tous')
+                setManquantFilterStatut('non_regle')
+                setManquantFilterDateDebut('')
+                setManquantFilterDateFin('')
+              }}
+              className="px-3 py-2 rounded-xl text-xs font-medium"
+              style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+              ✕ Réinitialiser
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Tableau */}
+      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+        <div className="overflow-y-auto" style={{ maxHeight: '55vh' }}>
+          <table className="w-full">
+            <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
+              <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                {['Date', 'Agent', 'Agence', 'Collecté', 'Rapporté', 'Manquant', 'Statut', 'Actions'].map(h => (
+                  <th key={h} className="text-left px-3 py-3 text-xs font-semibold"
+                    style={{ color: '#818387' }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {manquants
+                .filter(f => {
+                  const montant = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                  const ms = manquantSearch === '' ||
+                    `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(manquantSearch.toLowerCase())
+                  const ma = manquantFilterAgence === 'tous' || f.agents?.agence_id === manquantFilterAgence
+                  const mst = manquantFilterStatut === 'tous' ||
+                    (manquantFilterStatut === 'regle' ? f.manquant_regle : !f.manquant_regle)
+                  const md1 = !manquantFilterDateDebut || f.date >= manquantFilterDateDebut
+                  const md2 = !manquantFilterDateFin || f.date <= manquantFilterDateFin
+                  return ms && ma && mst && md1 && md2 && montant > 0
+                })
+                .map((f, i, arr) => {
+                  const montant = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                  return (
+                    <tr key={f.id}
+                      onClick={() => setSelectedManquant(f)}
+                      className="cursor-pointer hover:bg-gray-50 transition-colors"
+                      style={{
+                        borderBottom: i < arr.length - 1 ? '1px solid #f8fafc' : 'none',
+                        backgroundColor: selectedManquant?.id === f.id ? '#FEF2F2' : undefined
+                      }}>
+                      <td className="px-3 py-3">
+                        <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                          {new Date(f.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                        </div>
+                        <div className="text-xs" style={{ color: '#818387' }}>
+                          {new Date(f.date).getFullYear()}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                            style={{ backgroundColor: '#E4322C' }}>
+                            {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
+                          </div>
+                          <div>
+                            <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                              {f.agents?.prenom} {f.agents?.nom}
+                            </div>
+                            <div className="text-xs" style={{ color: '#818387' }}>
+                              {f.agents?.telephone || '—'}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 text-xs" style={{ color: '#818387' }}>
+                        {f.agents?.agences?.nom || '—'}
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs font-semibold" style={{ color: '#166534' }}>
+                          {(f.montant_mobilise || 0).toLocaleString()} F
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs font-semibold" style={{ color: '#2A4E94' }}>
+                          {(f.montant_rapporte || 0).toLocaleString()} F
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-sm font-bold" style={{ color: '#E4322C' }}>
+                          {montant.toLocaleString()} F
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                          style={{
+                            backgroundColor: f.manquant_regle ? '#DCFCE7' : '#FEE2E2',
+                            color: f.manquant_regle ? '#166534' : '#991B1B'
+                          }}>
+                          {f.manquant_regle ? '✅ Réglé' : '⚠️ En attente'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                        {!f.manquant_regle && (
+                          <button type="button"
+                            onClick={() => { setReglementFiche(f); setShowReglementModal(true) }}
+                            className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
+                            style={{ backgroundColor: '#2A4E94' }}>
+                            💰 Régler
+                          </button>
+                        )}
+                        {f.manquant_regle && f.manquant_regle_at && (
+                          <span className="text-xs" style={{ color: '#818387' }}>
+                            {new Date(f.manquant_regle_at).toLocaleDateString('fr-FR')}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+            </tbody>
+          </table>
+          {manquants.filter(f => Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0).length === 0 && (
+            <div className="p-12 text-center">
+              <div className="text-4xl mb-3">✅</div>
+              <div className="font-medium text-sm" style={{ color: '#166534' }}>Aucun manquant</div>
+              <div className="text-xs mt-1" style={{ color: '#818387' }}>
+                Tous les manquants ont été réglés !
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+
+    {/* Panneau détail manquant */}
+    {selectedManquant && (() => {
+      const montant = Math.max(0, (selectedManquant.montant_mobilise || 0) - (selectedManquant.montant_rapporte || 0))
+      return (
+        <div className="w-1/2 space-y-4">
+          <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+
+            {/* Header */}
+            <div className="p-5 border-b flex items-start justify-between"
+              style={{ borderColor: '#f1f5f9' }}>
+              <div>
+                <div className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+                  Manquant — {new Date(selectedManquant.date).toLocaleDateString('fr-FR', {
+                    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+                  })}
+                </div>
+                <div className="text-sm mt-0.5" style={{ color: '#818387' }}>
+                  {selectedManquant.agents?.prenom} {selectedManquant.agents?.nom}
+                  · {selectedManquant.agents?.agences?.nom}
+                </div>
+              </div>
+              <button type="button" onClick={() => setSelectedManquant(null)}
+                className="p-1.5 rounded-lg"
+                style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+            </div>
+
+            {/* Montant */}
+            <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+              <div className="rounded-2xl p-5 text-center"
+                style={{
+                  backgroundColor: selectedManquant.manquant_regle ? '#F0FDF4' : '#FEF2F2',
+                  border: `1px solid ${selectedManquant.manquant_regle ? '#BBF7D0' : '#FECACA'}`
+                }}>
+                <div className="text-3xl font-bold mb-1"
+                  style={{ color: selectedManquant.manquant_regle ? '#166534' : '#E4322C' }}>
+                  {montant.toLocaleString()} FCFA
+                </div>
+                <div className="text-sm"
+                  style={{ color: selectedManquant.manquant_regle ? '#166534' : '#991B1B' }}>
+                  {selectedManquant.manquant_regle ? '✅ Manquant réglé' : '⚠️ Non réglé'}
+                </div>
+                {selectedManquant.manquant_regle && selectedManquant.manquant_regle_at && (
+                  <div className="text-xs mt-1" style={{ color: '#818387' }}>
+                    Réglé le {new Date(selectedManquant.manquant_regle_at).toLocaleDateString('fr-FR')}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Détail fiche */}
+            <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+              <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>DÉTAIL DE LA FICHE</h4>
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: 'Montant collecté', value: (selectedManquant.montant_mobilise || 0).toLocaleString() + ' F' },
+                  { label: 'Montant rapporté', value: (selectedManquant.montant_rapporte || 0).toLocaleString() + ' F' },
+                  { label: 'Comptes ouverts', value: selectedManquant.comptes_ouverts || 0 },
+                  { label: 'Téléphone agent', value: selectedManquant.agents?.telephone || '—' },
+                ].map(k => (
+                  <div key={k.label} className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
+                    <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
+                    <div className="font-bold text-sm mt-0.5" style={{ color: '#1a1a2e' }}>{k.value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Commentaire chef si présent */}
+            {selectedManquant.commentaire_chef && (
+              <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+                <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>NOTE</h4>
+                <p className="text-sm" style={{ color: '#1a1a2e' }}>{selectedManquant.commentaire_chef}</p>
+              </div>
+            )}
+
+            {/* Action */}
+            <div className="p-5">
+              {!selectedManquant.manquant_regle ? (
+                <button type="button"
+                  onClick={() => { setReglementFiche(selectedManquant); setShowReglementModal(true) }}
+                  className="w-full py-3 rounded-xl text-white text-sm font-semibold"
+                  style={{ backgroundColor: '#2A4E94' }}>
+                  💰 Confirmer le règlement
+                </button>
+              ) : (
+                <div className="text-center text-sm font-medium" style={{ color: '#166534' }}>
+                  ✅ Ce manquant a été réglé
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )
+    })()}
+  </div>
+)}
+
           {/* Sections à venir */}
-          {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches', 'alertes', 'parametres', 'equipes', 'permissions'].includes(tab) && (
+          {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches', 'alertes', 'parametres', 'equipes', 'permissions', 'manquants'].includes(tab) && (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
                 <div className="text-5xl mb-4">🚧</div>
@@ -4070,6 +4436,78 @@ const [createUserForm, setCreateUserForm] = useState({
           </div>
         </form>
       )}
+    </div>
+  </div>
+)}
+
+{/* MODAL RÈGLEMENT MANQUANT */}
+{showReglementModal && reglementFiche && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+      <div className="px-6 py-4 border-b flex items-center justify-between"
+        style={{ borderColor: '#f1f5f9' }}>
+        <h3 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>
+          💰 Confirmer le règlement
+        </h3>
+        <button type="button" onClick={() => { setShowReglementModal(false); setReglementCommentaire('') }}
+          className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+      </div>
+
+      <div className="p-6 space-y-4">
+        {/* Info */}
+        <div className="rounded-xl p-4" style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA' }}>
+          <div className="font-semibold text-sm" style={{ color: '#991B1B' }}>
+            {reglementFiche.agents?.prenom} {reglementFiche.agents?.nom}
+          </div>
+          <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
+            Fiche du {new Date(reglementFiche.date).toLocaleDateString('fr-FR')}
+            · {reglementFiche.agents?.agences?.nom}
+          </div>
+          <div className="font-bold text-2xl mt-2" style={{ color: '#E4322C' }}>
+            {Math.max(0, (reglementFiche.montant_mobilise || 0) - (reglementFiche.montant_rapporte || 0)).toLocaleString()} FCFA
+          </div>
+        </div>
+
+        {/* Commentaire */}
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+            Note / Commentaire (optionnel)
+          </label>
+          <textarea value={reglementCommentaire}
+            onChange={e => setReglementCommentaire(e.target.value)}
+            rows={3}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none resize-none"
+            style={{ borderColor: '#e2e8f0' }}
+            placeholder="Ex: Règlement effectué en cash le 22/05..." />
+        </div>
+
+        {/* Info notification */}
+        <div className="rounded-xl p-3 flex items-center gap-2"
+          style={{ backgroundColor: '#EEF2FF' }}>
+          <span>🔔</span>
+          <p className="text-xs" style={{ color: '#2A4E94' }}>
+            L&apos;agent recevra une notification de confirmation.
+          </p>
+        </div>
+
+        {/* Boutons */}
+        <div className="flex gap-3">
+          <button type="button"
+            onClick={() => { setShowReglementModal(false); setReglementCommentaire('') }}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+            style={{ borderColor: '#e2e8f0', color: '#818387' }}>
+            Annuler
+          </button>
+          <button type="button"
+            onClick={() => confirmerReglement(reglementFiche.id, reglementCommentaire)}
+            disabled={reglementLoading}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+            style={{ backgroundColor: reglementLoading ? '#818387' : '#166534' }}>
+            {reglementLoading ? 'Traitement...' : '✅ Confirmer le règlement'}
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 )}
