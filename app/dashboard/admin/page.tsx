@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 
-type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres'
+type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres' | 'equipes'
 
 export default function DashboardAdmin() {
   const router = useRouter()
@@ -116,6 +116,21 @@ const [adminForm, setAdminForm] = useState({ nom: '', prenom: '', telephone: '' 
 const [adminSaving, setAdminSaving] = useState(false)
 const [adminSuccess, setAdminSuccess] = useState(false)
 
+// Équipes
+const [equipes, setEquipes] = useState<any[]>([])
+const [equipeSearch, setEquipeSearch] = useState('')
+const [equipeFilterAgence, setEquipeFilterAgence] = useState('tous')
+const [selectedEquipe, setSelectedEquipe] = useState<any>(null)
+const [equipeMembers, setEquipeMembers] = useState<any[]>([])
+const [showEquipeModal, setShowEquipeModal] = useState(false)
+const [editingEquipe, setEditingEquipe] = useState<any>(null)
+const [deleteEquipeConfirm, setDeleteEquipeConfirm] = useState<string | null>(null)
+const [equipeLoading, setEquipeLoading] = useState(false)
+const [showAddMembreModal, setShowAddMembreModal] = useState(false)
+const [equipeForm, setEquipeForm] = useState({
+  nom: '', agence_id: '', chef_id: '', description: '', actif: true
+})
+
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
 
@@ -129,6 +144,7 @@ const [adminSuccess, setAdminSuccess] = useState(false)
       prenom: admin?.prenom || '',
       telephone: admin?.telephone || '',
     })
+    if (tab === 'equipes') loadEquipes()
   }, [tab])
   useEffect(() => { loadAll() }, [])
 
@@ -525,6 +541,113 @@ const [adminSuccess, setAdminSuccess] = useState(false)
     setShowObjectifModal(true)
   }
 
+  async function loadEquipes() {
+    const { data } = await supabase
+      .from('equipes')
+      .select('*, agences(nom), agents!equipes_chef_id_fkey(nom, prenom)')
+      .order('created_at', { ascending: false })
+  
+    const equipesWithStats = await Promise.all((data || []).map(async eq => {
+      const { count: nbMembres } = await supabase
+        .from('agents')
+        .select('*', { count: 'exact', head: true })
+        .eq('equipe_id', eq.id)
+      return { ...eq, nbMembres: nbMembres || 0 }
+    }))
+    setEquipes(equipesWithStats)
+  }
+  
+  async function selectEquipe(equipe: any) {
+    setSelectedEquipe(equipe)
+    const { data } = await supabase
+      .from('agents')
+      .select('*, agences(nom)')
+      .eq('equipe_id', equipe.id)
+      .neq('role', 'admin')
+    setEquipeMembers(data || [])
+  }
+  
+  async function saveEquipe(e: React.FormEvent) {
+    e.preventDefault()
+    setEquipeLoading(true)
+    const payload = {
+      nom: equipeForm.nom,
+      agence_id: equipeForm.agence_id || null,
+      chef_id: equipeForm.chef_id || null,
+      description: equipeForm.description || null,
+      actif: equipeForm.actif,
+    }
+    if (editingEquipe) {
+      await supabase.from('equipes').update(payload).eq('id', editingEquipe.id)
+      setEquipes(prev => prev.map(e => e.id === editingEquipe.id ? { ...e, ...payload } : e))
+      if (selectedEquipe?.id === editingEquipe.id) setSelectedEquipe((p: any) => ({ ...p, ...payload }))
+    } else {
+      const { data } = await supabase.from('equipes').insert(payload).select().single()
+      if (data) setEquipes(prev => [{ ...data, nbMembres: 0 }, ...prev])
+    }
+    setShowEquipeModal(false)
+    setEditingEquipe(null)
+    resetEquipeForm()
+    setEquipeLoading(false)
+  }
+  
+  async function deleteEquipe(id: string) {
+    // Retirer tous les agents de l'équipe avant suppression
+    await supabase.from('agents').update({ equipe_id: null }).eq('equipe_id', id)
+    await supabase.from('equipes').delete().eq('id', id)
+    setEquipes(prev => prev.filter(e => e.id !== id))
+    if (selectedEquipe?.id === id) { setSelectedEquipe(null); setEquipeMembers([]) }
+    setDeleteEquipeConfirm(null)
+  }
+  
+  async function retirerMembre(agentId: string) {
+    await supabase.from('agents').update({ equipe_id: null }).eq('id', agentId)
+    setEquipeMembers(prev => prev.filter(a => a.id !== agentId))
+    setEquipes(prev => prev.map(e => e.id === selectedEquipe?.id
+      ? { ...e, nbMembres: Math.max(0, e.nbMembres - 1) } : e))
+  }
+  
+  async function ajouterMembre(agentId: string) {
+    await supabase.from('agents').update({ equipe_id: selectedEquipe.id }).eq('id', agentId)
+    const agent = agentsData.find(a => a.id === agentId)
+    if (agent) {
+      setEquipeMembers(prev => [...prev, agent])
+      setEquipes(prev => prev.map(e => e.id === selectedEquipe?.id
+        ? { ...e, nbMembres: e.nbMembres + 1 } : e))
+    }
+    setShowAddMembreModal(false)
+  }
+  
+  async function definirChef(agentId: string) {
+    await supabase.from('equipes').update({ chef_id: agentId }).eq('id', selectedEquipe.id)
+    const agent = equipeMembers.find(a => a.id === agentId)
+    setSelectedEquipe((p: any) => ({ ...p, chef_id: agentId, agents: agent }))
+    setEquipes(prev => prev.map(e => e.id === selectedEquipe.id
+      ? { ...e, chef_id: agentId, agents: agent } : e))
+  }
+  
+  function resetEquipeForm() {
+    setEquipeForm({ nom: '', agence_id: '', chef_id: '', description: '', actif: true })
+  }
+  
+  function openCreateEquipe() {
+    setEditingEquipe(null)
+    resetEquipeForm()
+    setShowEquipeModal(true)
+  }
+  
+  function openEditEquipe(eq: any) {
+    setEditingEquipe(eq)
+    setEquipeForm({
+      nom: eq.nom || '',
+      agence_id: eq.agence_id || '',
+      chef_id: eq.chef_id || '',
+      description: eq.description || '',
+      actif: eq.actif !== false,
+    })
+    setShowEquipeModal(true)
+  }
+
   async function loadFiches() {
     const { data } = await supabase
       .from('fiches_journalieres')
@@ -712,6 +835,7 @@ const [adminSuccess, setAdminSuccess] = useState(false)
     { key: 'dashboard', label: 'Dashboard', icon: '📊', active: true },
     { key: 'agences', label: 'Agences', icon: '🏦', active: true },
     { key: 'agents', label: 'Agents', icon: '👥', active: true },
+    { key: 'equipes', label: 'Équipes', icon: '🤝', active: true },
     { key: 'objectifs', label: 'Objectifs', icon: '🎯', active: true },
     { key: 'fiches', label: 'Fiches', icon: '📋', active: true },
     { key: 'alertes', label: 'Alertes', icon: '⚠️', active: true },
@@ -790,6 +914,7 @@ const [adminSuccess, setAdminSuccess] = useState(false)
               {tab === 'fiches' && '📋 Gestion des Fiches'} 
               {tab === 'alertes' && '⚠️ Alertes & Anomalies'}
               {tab === 'parametres' && '⚙️ Paramètres'}
+              {tab === 'equipes' && '🤝 Gestion des Équipes'}
             </h1>
             <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
               PADES Microfinance — Back-office Super Admin
@@ -2319,8 +2444,267 @@ const [adminSuccess, setAdminSuccess] = useState(false)
   </div>
 )}
 
+{/* ════ ÉQUIPES ════ */}
+{tab === 'equipes' && (
+  <div className="flex gap-4">
+
+    {/* Liste équipes */}
+    <div className={`flex flex-col space-y-4 transition-all ${selectedEquipe ? 'w-1/2' : 'w-full'}`}>
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+            Gestion des équipes
+          </h2>
+          <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
+            {equipes.length} équipe(s) dans le réseau PADES
+          </p>
+        </div>
+        <button type="button" onClick={openCreateEquipe}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-sm font-semibold"
+          style={{ backgroundColor: '#2A4E94' }}>
+          ➕ Nouvelle équipe
+        </button>
+      </div>
+
+      {/* Filtres */}
+      <div className="bg-white rounded-2xl p-4 border border-gray-100 flex flex-wrap gap-3">
+        <div className="relative flex-1 min-w-48">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <svg className="w-4 h-4" style={{ color: '#818387' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </div>
+          <input type="text" placeholder="Rechercher une équipe..."
+            value={equipeSearch} onChange={e => setEquipeSearch(e.target.value)}
+            className="w-full pl-9 pr-4 py-2 rounded-xl border text-sm outline-none"
+            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+        </div>
+        <select value={equipeFilterAgence} onChange={e => setEquipeFilterAgence(e.target.value)}
+          className="px-3 py-2 rounded-xl border text-xs outline-none"
+          style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+          <option value="tous">Toutes les agences</option>
+          {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
+        </select>
+      </div>
+
+      {/* Grille équipes */}
+      {(() => {
+        const filtered = equipes.filter(e => {
+          const ms = equipeSearch === '' || e.nom.toLowerCase().includes(equipeSearch.toLowerCase())
+          const ma = equipeFilterAgence === 'tous' || e.agence_id === equipeFilterAgence
+          return ms && ma
+        })
+        if (filtered.length === 0) return (
+          <div className="bg-white rounded-2xl border border-gray-100 p-12 text-center">
+            <div className="text-5xl mb-4">🤝</div>
+            <div className="font-semibold text-base" style={{ color: '#1a1a2e' }}>Aucune équipe trouvée</div>
+            <div className="text-sm mt-2 mb-6" style={{ color: '#818387' }}>
+              Créez votre première équipe pour organiser vos agents
+            </div>
+            <button type="button" onClick={openCreateEquipe}
+              className="px-6 py-3 rounded-xl text-white text-sm font-semibold"
+              style={{ backgroundColor: '#2A4E94' }}>
+              ➕ Créer une équipe
+            </button>
+          </div>
+        )
+        return (
+          <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {filtered.map(eq => (
+              <div key={eq.id}
+                onClick={() => selectEquipe(eq)}
+                className="bg-white rounded-2xl border border-gray-100 p-5 cursor-pointer hover:border-blue-200 transition-all"
+                style={{ borderColor: selectedEquipe?.id === eq.id ? '#2A4E94' : undefined,
+                  boxShadow: selectedEquipe?.id === eq.id ? '0 0 0 2px #2A4E94' : undefined }}>
+                <div className="flex items-start justify-between mb-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm text-white"
+                      style={{ backgroundColor: '#2A4E94' }}>
+                      {eq.nom?.[0]?.toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="font-bold text-sm" style={{ color: '#1a1a2e' }}>{eq.nom}</div>
+                      <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
+                        {eq.agences?.nom || '—'}
+                      </div>
+                    </div>
+                  </div>
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                    style={{
+                      backgroundColor: eq.actif !== false ? '#DCFCE7' : '#FEE2E2',
+                      color: eq.actif !== false ? '#166534' : '#991B1B'
+                    }}>
+                    {eq.actif !== false ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+
+                {/* Chef */}
+                <div className="flex items-center gap-2 mb-3 p-2 rounded-xl" style={{ backgroundColor: '#f8fafc' }}>
+                  <span className="text-sm">👨‍💼</span>
+                  <div>
+                    <div className="text-xs" style={{ color: '#818387' }}>Chef d&apos;équipe</div>
+                    <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                      {eq.agents ? `${eq.agents.prenom} ${eq.agents.nom}` : '— Non assigné'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Stats */}
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                  <div className="rounded-xl p-2 text-center" style={{ backgroundColor: '#EEF2FF' }}>
+                    <div className="font-bold text-lg" style={{ color: '#2A4E94' }}>{eq.nbMembres}</div>
+                    <div className="text-xs" style={{ color: '#818387' }}>Membres</div>
+                  </div>
+                  <div className="rounded-xl p-2 text-center" style={{ backgroundColor: '#F0FDF4' }}>
+                    <div className="font-bold text-lg" style={{ color: '#166534' }}>
+                      {eq.actif !== false ? '✅' : '⏸'}
+                    </div>
+                    <div className="text-xs" style={{ color: '#818387' }}>Statut</div>
+                  </div>
+                </div>
+
+                {eq.description && (
+                  <p className="text-xs mb-3" style={{ color: '#818387' }}>{eq.description}</p>
+                )}
+
+                {/* Actions */}
+                <div className="flex gap-2 pt-3 border-t" style={{ borderColor: '#f1f5f9' }}
+                  onClick={e => e.stopPropagation()}>
+                  <button type="button" onClick={() => openEditEquipe(eq)}
+                    className="flex-1 py-1.5 rounded-lg text-xs font-medium"
+                    style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                    ✏️ Modifier
+                  </button>
+                  <button type="button" onClick={() => setDeleteEquipeConfirm(eq.id)}
+                    className="p-1.5 rounded-lg"
+                    style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+                    🗑️
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      })()}
+    </div>
+
+    {/* ── PANNEAU DÉTAIL ÉQUIPE ── */}
+    {selectedEquipe && (
+      <div className="w-1/2 space-y-4">
+        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+
+          {/* Header */}
+          <div className="p-5 border-b flex items-start justify-between" style={{ borderColor: '#f1f5f9' }}>
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-lg text-white"
+                style={{ backgroundColor: '#2A4E94' }}>
+                {selectedEquipe.nom?.[0]?.toUpperCase()}
+              </div>
+              <div>
+                <div className="font-bold text-base" style={{ color: '#1a1a2e' }}>{selectedEquipe.nom}</div>
+                <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
+                  {selectedEquipe.agences?.nom || '—'}
+                </div>
+                <div className="flex gap-2 mt-1">
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                    style={{
+                      backgroundColor: selectedEquipe.actif !== false ? '#DCFCE7' : '#FEE2E2',
+                      color: selectedEquipe.actif !== false ? '#166534' : '#991B1B'
+                    }}>
+                    {selectedEquipe.actif !== false ? 'Active' : 'Inactive'}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <button type="button" onClick={() => { setSelectedEquipe(null); setEquipeMembers([]) }}
+              className="p-1.5 rounded-lg"
+              style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+          </div>
+
+          {/* Chef d'équipe */}
+          <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+            <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>CHEF D&apos;ÉQUIPE</h4>
+            {selectedEquipe.agents ? (
+              <div className="flex items-center gap-3 p-3 rounded-xl" style={{ backgroundColor: '#f8fafc' }}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white"
+                  style={{ backgroundColor: '#2A4E94' }}>
+                  {selectedEquipe.agents.prenom?.[0]}{selectedEquipe.agents.nom?.[0]}
+                </div>
+                <div>
+                  <div className="font-semibold text-sm" style={{ color: '#1a1a2e' }}>
+                    {selectedEquipe.agents.prenom} {selectedEquipe.agents.nom}
+                  </div>
+                  <div className="text-xs" style={{ color: '#818387' }}>Chef assigné</div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 rounded-xl text-xs text-center" style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
+                ⚠️ Aucun chef assigné — Cliquez sur ⭐ d&apos;un membre pour le définir chef
+              </div>
+            )}
+          </div>
+
+          {/* Membres */}
+          <div className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-semibold text-xs" style={{ color: '#818387' }}>
+                MEMBRES ({equipeMembers.length})
+              </h4>
+              <button type="button" onClick={() => setShowAddMembreModal(true)}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
+                style={{ backgroundColor: '#2A4E94' }}>
+                ➕ Ajouter
+              </button>
+            </div>
+
+            {equipeMembers.length === 0 ? (
+              <div className="text-center py-6 text-sm" style={{ color: '#818387' }}>
+                Aucun membre dans cette équipe
+              </div>
+            ) : (
+              <div className="space-y-2 overflow-y-auto" style={{ maxHeight: '320px' }}>
+                {equipeMembers.map(membre => (
+                  <div key={membre.id} className="flex items-center gap-3 p-3 rounded-xl"
+                    style={{ backgroundColor: '#f8fafc' }}>
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                      style={{ backgroundColor: selectedEquipe.chef_id === membre.id ? '#854D0E' : '#2A4E94' }}>
+                      {membre.prenom?.[0]}{membre.nom?.[0]}
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                        {membre.prenom} {membre.nom}
+                        {selectedEquipe.chef_id === membre.id && (
+                          <span className="ml-1 text-xs px-1.5 py-0.5 rounded-full"
+                            style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>Chef</span>
+                        )}
+                      </div>
+                      <div className="text-xs" style={{ color: '#818387' }}>{membre.role}</div>
+                    </div>
+                    <div className="flex gap-1">
+                      {selectedEquipe.chef_id !== membre.id && (
+                        <button type="button" onClick={() => definirChef(membre.id)}
+                          className="p-1.5 rounded-lg text-xs" title="Définir comme chef"
+                          style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>⭐</button>
+                      )}
+                      <button type="button" onClick={() => retirerMembre(membre.id)}
+                        className="p-1.5 rounded-lg text-xs" title="Retirer de l'équipe"
+                        style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>✕</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+  </div>
+)}
+
           {/* Sections à venir */}
-          {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches', 'alertes', 'parametres'].includes(tab) && (
+          {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches', 'alertes', 'parametres', 'equipes'].includes(tab) && (
             <div className="flex items-center justify-center h-64">
               <div className="text-center">
                 <div className="text-5xl mb-4">🚧</div>
@@ -2976,6 +3360,171 @@ const [adminSuccess, setAdminSuccess] = useState(false)
             Confirmer la décision
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* MODAL ÉQUIPE */}
+{showEquipeModal && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl">
+      <h3 className="font-bold text-lg mb-5" style={{ color: '#1a1a2e' }}>
+        {editingEquipe ? '✏️ Modifier l\'équipe' : '🤝 Nouvelle équipe'}
+      </h3>
+      <form onSubmit={saveEquipe} className="space-y-4">
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+            Nom de l&apos;équipe *
+          </label>
+          <input type="text" value={equipeForm.nom}
+            onChange={e => setEquipeForm(p => ({ ...p, nom: e.target.value }))}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+            style={{ borderColor: '#e2e8f0' }}
+            placeholder="Ex: Équipe Alpha" required />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+            Agence
+          </label>
+          <select value={equipeForm.agence_id}
+            onChange={e => setEquipeForm(p => ({ ...p, agence_id: e.target.value, chef_id: '' }))}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+            style={{ borderColor: '#e2e8f0' }}>
+            <option value="">Sélectionner une agence</option>
+            {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+            Chef d&apos;équipe
+          </label>
+          <select value={equipeForm.chef_id}
+            onChange={e => setEquipeForm(p => ({ ...p, chef_id: e.target.value }))}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+            style={{ borderColor: '#e2e8f0' }}>
+            <option value="">Aucun chef assigné</option>
+            {agentsData
+              .filter(a => !equipeForm.agence_id || a.agence_id === equipeForm.agence_id)
+              .filter(a => ['chef', 'agent', 'responsable'].includes(a.role))
+              .map(a => (
+                <option key={a.id} value={a.id}>
+                  {a.prenom} {a.nom} — {a.role}
+                </option>
+              ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+            Description (optionnel)
+          </label>
+          <textarea value={equipeForm.description}
+            onChange={e => setEquipeForm(p => ({ ...p, description: e.target.value }))}
+            className="w-full px-4 py-3 rounded-xl border text-sm outline-none resize-none"
+            style={{ borderColor: '#e2e8f0' }} rows={2}
+            placeholder="Description de l'équipe..." />
+        </div>
+        <div className="flex items-center gap-3">
+          <label className="text-xs font-semibold" style={{ color: '#1a1a2e' }}>Statut</label>
+          <button type="button" onClick={() => setEquipeForm(p => ({ ...p, actif: !p.actif }))}
+            className="relative w-10 h-6 rounded-full transition-all"
+            style={{ backgroundColor: equipeForm.actif ? '#2A4E94' : '#e2e8f0' }}>
+            <div className="absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm"
+              style={{ left: equipeForm.actif ? '22px' : '2px' }} />
+          </button>
+          <span className="text-xs" style={{ color: '#818387' }}>{equipeForm.actif ? 'Active' : 'Inactive'}</span>
+        </div>
+        <div className="flex gap-3 mt-4">
+          <button type="button" onClick={() => { setShowEquipeModal(false); setEditingEquipe(null) }}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+            style={{ borderColor: '#e2e8f0', color: '#818387' }}>Annuler</button>
+          <button type="submit" disabled={equipeLoading}
+            className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+            style={{ backgroundColor: equipeLoading ? '#818387' : '#2A4E94' }}>
+            {equipeLoading ? 'Sauvegarde...' : editingEquipe ? 'Enregistrer' : 'Créer l\'équipe'}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+)}
+
+{/* MODAL SUPPRESSION ÉQUIPE */}
+{deleteEquipeConfirm && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl text-center">
+      <div className="text-4xl mb-4">🤝</div>
+      <h3 className="font-bold text-lg mb-2" style={{ color: '#1a1a2e' }}>Supprimer cette équipe ?</h3>
+      <p className="text-sm mb-6" style={{ color: '#818387' }}>
+        Les agents de cette équipe seront désaffectés. Cette action est irréversible.
+      </p>
+      <div className="flex gap-3">
+        <button type="button" onClick={() => setDeleteEquipeConfirm(null)}
+          className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+          style={{ borderColor: '#e2e8f0', color: '#818387' }}>Annuler</button>
+        <button type="button" onClick={() => deleteEquipe(deleteEquipeConfirm)}
+          className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+          style={{ backgroundColor: '#E4322C' }}>Supprimer</button>
+      </div>
+    </div>
+  </div>
+)}
+
+{/* MODAL AJOUTER MEMBRE */}
+{showAddMembreModal && selectedEquipe && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
+      <div className="px-6 py-4 border-b flex items-center justify-between"
+        style={{ borderColor: '#f1f5f9' }}>
+        <h3 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>
+          ➕ Ajouter un membre — {selectedEquipe.nom}
+        </h3>
+        <button type="button" onClick={() => setShowAddMembreModal(false)}
+          className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+      </div>
+      <div className="p-4 overflow-y-auto" style={{ maxHeight: '60vh' }}>
+        {agentsData
+          .filter(a => a.equipe_id !== selectedEquipe.id && !equipeMembers.find(m => m.id === a.id))
+          .filter(a => !selectedEquipe.agence_id || a.agence_id === selectedEquipe.agence_id)
+          .length === 0 ? (
+          <div className="text-center py-8 text-sm" style={{ color: '#818387' }}>
+            Tous les agents de cette agence sont déjà dans l&apos;équipe
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {agentsData
+              .filter(a => !equipeMembers.find(m => m.id === a.id))
+              .filter(a => !selectedEquipe.agence_id || a.agence_id === selectedEquipe.agence_id)
+              .map(agent => (
+                <div key={agent.id}
+                  className="flex items-center justify-between p-3 rounded-xl"
+                  style={{ backgroundColor: '#f8fafc' }}>
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white"
+                      style={{ backgroundColor: '#2A4E94' }}>
+                      {agent.prenom?.[0]}{agent.nom?.[0]}
+                    </div>
+                    <div>
+                      <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                        {agent.prenom} {agent.nom}
+                      </div>
+                      <div className="text-xs" style={{ color: '#818387' }}>
+                        {agent.role} · {agent.agences?.nom || '—'}
+                      </div>
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => ajouterMembre(agent.id)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
+                    style={{ backgroundColor: '#2A4E94' }}>
+                    Ajouter
+                  </button>
+                </div>
+              ))}
+          </div>
+        )}
       </div>
     </div>
   </div>
