@@ -137,6 +137,17 @@ const [permissionsLoading, setPermissionsLoading] = useState(false)
 const [permissionsSaving, setPermissionsSaving] = useState(false)
 const [permissionsSuccess, setPermissionsSuccess] = useState(false)
 
+// Création utilisateur
+const [showCreateUserModal, setShowCreateUserModal] = useState(false)
+const [createUserLoading, setCreateUserLoading] = useState(false)
+const [createUserSuccess, setCreateUserSuccess] = useState<any>(null)
+const [createUserError, setCreateUserError] = useState('')
+const [equipesFiltrees, setEquipesFiltrees] = useState<any[]>([])
+const [createUserForm, setCreateUserForm] = useState({
+  email: '', password: '', nom: '', prenom: '',
+  telephone: '', role: 'agent', agence_id: '', equipe_id: ''
+})
+
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
 
@@ -653,6 +664,61 @@ const [permissionsSuccess, setPermissionsSuccess] = useState(false)
       actif: eq.actif !== false,
     })
     setShowEquipeModal(true)
+  }
+
+  async function createUser(e: React.FormEvent) {
+    e.preventDefault()
+    setCreateUserLoading(true)
+    setCreateUserError('')
+  
+    try {
+      const res = await fetch('/api/admin/create-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(createUserForm),
+      })
+      const data = await res.json()
+  
+      if (!res.ok) {
+        setCreateUserError(data.error || 'Erreur lors de la création')
+      } else {
+        setCreateUserSuccess({
+          email: createUserForm.email,
+          password: createUserForm.password,
+          nom: createUserForm.nom,
+          prenom: createUserForm.prenom,
+          role: createUserForm.role,
+        })
+        await loadAgentsData()
+        await loadStats()
+      }
+    } catch {
+      setCreateUserError('Erreur réseau. Réessayez.')
+    }
+    setCreateUserLoading(false)
+  }
+  
+  function resetCreateUserForm() {
+    setCreateUserForm({
+      email: '', password: '', nom: '', prenom: '',
+      telephone: '', role: 'agent', agence_id: '', equipe_id: ''
+    })
+    setCreateUserError('')
+    setCreateUserSuccess(null)
+    setEquipesFiltrees([])
+  }
+  
+  async function onAgenceChangeCreateUser(agenceId: string) {
+    setCreateUserForm(p => ({ ...p, agence_id: agenceId, equipe_id: '' }))
+    if (agenceId) {
+      const { data } = await supabase
+        .from('equipes')
+        .select('*')
+        .eq('agence_id', agenceId)
+      setEquipesFiltrees(data || [])
+    } else {
+      setEquipesFiltrees([])
+    }
   }
 
   async function loadPermissions() {
@@ -1405,6 +1471,12 @@ const [permissionsSuccess, setPermissionsSuccess] = useState(false)
             {agentsData.length} agent(s) dans le réseau PADES
           </p>
         </div>
+        <button type="button"
+          onClick={() => { resetCreateUserForm(); setShowCreateUserModal(true) }}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-white text-sm font-semibold"
+          style={{ backgroundColor: '#2A4E94' }}>
+          ➕ Créer un utilisateur
+        </button>
       </div>
 
       {/* Filtres */}
@@ -3753,6 +3825,251 @@ const [permissionsSuccess, setPermissionsSuccess] = useState(false)
           </div>
         )}
       </div>
+    </div>
+  </div>
+)}
+
+{/* MODAL CRÉER UTILISATEUR */}
+{showCreateUserModal && (
+  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
+    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
+    <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+
+      {/* Header */}
+      <div className="px-6 py-4 border-b flex items-center justify-between"
+        style={{ borderColor: '#f1f5f9' }}>
+        <h3 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>
+          👤 Créer un utilisateur
+        </h3>
+        <button type="button"
+          onClick={() => { setShowCreateUserModal(false); resetCreateUserForm() }}
+          className="p-2 rounded-lg"
+          style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+      </div>
+
+      {/* Succès */}
+      {createUserSuccess ? (
+        <div className="p-6 space-y-4">
+          <div className="rounded-2xl p-5 text-center"
+            style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0' }}>
+            <div className="text-4xl mb-3">🎉</div>
+            <div className="font-bold text-base mb-1" style={{ color: '#166534' }}>
+              Compte créé avec succès !
+            </div>
+            <div className="text-sm" style={{ color: '#166534' }}>
+              {createUserSuccess.prenom} {createUserSuccess.nom} — {createUserSuccess.role}
+            </div>
+          </div>
+
+          {/* Identifiants */}
+          <div className="rounded-2xl p-4 space-y-3"
+            style={{ backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}>
+            <h4 className="font-semibold text-xs" style={{ color: '#818387' }}>
+              🔑 IDENTIFIANTS DE CONNEXION
+            </h4>
+            <div className="space-y-2">
+              {[
+                { label: 'Email', value: createUserSuccess.email },
+                { label: 'Mot de passe', value: createUserSuccess.password },
+              ].map(item => (
+                <div key={item.label} className="flex items-center justify-between p-3 rounded-xl"
+                  style={{ backgroundColor: 'white', border: '1px solid #e2e8f0' }}>
+                  <div>
+                    <div className="text-xs" style={{ color: '#818387' }}>{item.label}</div>
+                    <div className="font-mono text-sm font-semibold" style={{ color: '#1a1a2e' }}>
+                      {item.value}
+                    </div>
+                  </div>
+                  <button type="button"
+                    onClick={() => navigator.clipboard.writeText(item.value)}
+                    className="px-2 py-1 rounded-lg text-xs font-medium"
+                    style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                    📋 Copier
+                  </button>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs" style={{ color: '#991B1B' }}>
+              ⚠️ Communiquez ces identifiants à l&apos;utilisateur. Le mot de passe ne sera plus visible après fermeture.
+            </p>
+          </div>
+
+          <div className="flex gap-3">
+            <button type="button"
+              onClick={() => {
+                const text = `Identifiants PERCOM\nEmail: ${createUserSuccess.email}\nMot de passe: ${createUserSuccess.password}`
+                navigator.clipboard.writeText(text)
+              }}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold"
+              style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+              📋 Copier tout
+            </button>
+            <button type="button"
+              onClick={() => { resetCreateUserForm(); setShowCreateUserModal(false) }}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+              style={{ backgroundColor: '#2A4E94' }}>
+              ✅ Terminer
+            </button>
+          </div>
+        </div>
+      ) : (
+        <form onSubmit={createUser} className="p-6 space-y-4 overflow-y-auto"
+          style={{ maxHeight: '80vh' }}>
+
+          {/* Erreur */}
+          {createUserError && (
+            <div className="p-3 rounded-xl text-sm"
+              style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+              ❌ {createUserError}
+            </div>
+          )}
+
+          {/* Identité */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+                Prénom *
+              </label>
+              <input type="text" value={createUserForm.prenom}
+                onChange={e => setCreateUserForm(p => ({ ...p, prenom: e.target.value }))}
+                className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                style={{ borderColor: '#e2e8f0' }}
+                placeholder="Koffi" required />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+                Nom *
+              </label>
+              <input type="text" value={createUserForm.nom}
+                onChange={e => setCreateUserForm(p => ({ ...p, nom: e.target.value }))}
+                className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                style={{ borderColor: '#e2e8f0' }}
+                placeholder="Mensah" required />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+              Téléphone
+            </label>
+            <input type="tel" value={createUserForm.telephone}
+              onChange={e => setCreateUserForm(p => ({ ...p, telephone: e.target.value }))}
+              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+              style={{ borderColor: '#e2e8f0' }}
+              placeholder="+228 9X XX XX XX" />
+          </div>
+
+          {/* Accès */}
+          <div className="rounded-2xl border p-4 space-y-4" style={{ borderColor: '#e2e8f0' }}>
+            <div className="text-xs font-bold" style={{ color: '#1a1a2e' }}>🔐 Accès</div>
+            <div>
+              <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+                Email *
+              </label>
+              <input type="email" value={createUserForm.email}
+                onChange={e => setCreateUserForm(p => ({ ...p, email: e.target.value }))}
+                className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                style={{ borderColor: '#e2e8f0' }}
+                placeholder="koffi.mensah@pades.tg" required />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+                Mot de passe temporaire *
+              </label>
+              <div className="relative">
+                <input type="text" value={createUserForm.password}
+                  onChange={e => setCreateUserForm(p => ({ ...p, password: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border text-sm outline-none pr-24"
+                  style={{ borderColor: '#e2e8f0' }}
+                  placeholder="Min. 8 caractères" required minLength={8} />
+                <button type="button"
+                  onClick={() => {
+                    const pwd = Math.random().toString(36).slice(-8) + Math.random().toString(36).slice(-4).toUpperCase() + '!'
+                    setCreateUserForm(p => ({ ...p, password: pwd }))
+                  }}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 rounded-lg text-xs font-medium"
+                  style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                  🎲 Générer
+                </button>
+              </div>
+              <p className="text-xs mt-1" style={{ color: '#818387' }}>
+                Ce mot de passe sera communiqué à l&apos;utilisateur
+              </p>
+            </div>
+          </div>
+
+          {/* Rôle & Affectation */}
+          <div className="rounded-2xl border p-4 space-y-4" style={{ borderColor: '#e2e8f0' }}>
+            <div className="text-xs font-bold" style={{ color: '#1a1a2e' }}>🎭 Rôle & Affectation</div>
+            <div>
+              <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+                Rôle *
+              </label>
+              <div className="grid grid-cols-4 gap-2">
+                {[
+                  { key: 'agent', label: '👤 Agent' },
+                  { key: 'chef', label: '👨‍💼 Chef' },
+                  { key: 'responsable', label: '🏦 Responsable' },
+                  { key: 'dg', label: '⭐ DG' },
+                ].map(r => (
+                  <button key={r.key} type="button"
+                    onClick={() => setCreateUserForm(p => ({ ...p, role: r.key }))}
+                    className="py-2 rounded-xl text-xs font-semibold transition-all"
+                    style={{
+                      backgroundColor: createUserForm.role === r.key ? '#2A4E94' : '#f8fafc',
+                      color: createUserForm.role === r.key ? 'white' : '#818387',
+                    }}>
+                    {r.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+                Agence
+              </label>
+              <select
+                value={createUserForm.agence_id}
+                onChange={e => onAgenceChangeCreateUser(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                style={{ borderColor: '#e2e8f0' }}>
+                <option value="">Sélectionner une agence</option>
+                {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
+              </select>
+            </div>
+            {equipesFiltrees.length > 0 && (
+              <div>
+                <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
+                  Équipe
+                </label>
+                <select
+                  value={createUserForm.equipe_id}
+                  onChange={e => setCreateUserForm(p => ({ ...p, equipe_id: e.target.value }))}
+                  className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                  style={{ borderColor: '#e2e8f0' }}>
+                  <option value="">Aucune équipe</option>
+                  {equipesFiltrees.map(eq => <option key={eq.id} value={eq.id}>{eq.nom}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* Boutons */}
+          <div className="flex gap-3">
+            <button type="button"
+              onClick={() => { setShowCreateUserModal(false); resetCreateUserForm() }}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+              style={{ borderColor: '#e2e8f0', color: '#818387' }}>
+              Annuler
+            </button>
+            <button type="submit" disabled={createUserLoading}
+              className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+              style={{ backgroundColor: createUserLoading ? '#818387' : '#2A4E94' }}>
+              {createUserLoading ? 'Création...' : '✅ Créer le compte'}
+            </button>
+          </div>
+        </form>
+      )}
     </div>
   </div>
 )}
