@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import FicheDetail from '@/components/FicheDetail' 
 
 type Tab = 'dashboard' | 'agences' | 'agents' | 'equipes' | 'objectifs' | 'fiches' | 'alertes' | 'manquants' | 'parametres'
 
@@ -299,10 +300,19 @@ export default function DashboardDG() {
     setShowObjectifModal(true)
   }
 
-  async function loadFiches() {
-    const { data } = await supabase.from('fiches_journalieres')
-      .select('*, agents!inner(nom, prenom, agence_id, agences(nom))')
-      .order('date', { ascending: false }).limit(100)
+  async function loadFiches(resp?: any) {
+    // Pour admin et DG (sans filtre agence) :
+    const { data } = await supabase
+      .from('fiches_journalieres')
+      .select(`
+        *,
+        agents!inner(nom, prenom, agence_id, agences(nom)),
+        reactivations(*),
+        augmentations_mise(*),
+        assurances_details(*)
+      `)
+      .order('date', { ascending: false })
+      .limit(100)
     setFiches(data || [])
   }
 
@@ -1092,159 +1102,17 @@ export default function DashboardDG() {
           )}
 
           {/* ════ FICHES (lecture seule) ════ */}
-          {tab === 'fiches' && (
-            <div className="flex gap-4">
-              <div className={`flex flex-col space-y-4 transition-all ${selectedFiche ? 'w-1/2' : 'w-full'}`}>
-                <div className="flex items-center justify-between">
-                  <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>Vue des fiches</h2>
-                  <div className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
-                    👁️ Lecture seule
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-4 gap-3">
-                  {[
-                    { label: 'Total', value: fiches.length, bg: '#EEF2FF', color: '#2A4E94' },
-                    { label: 'Validées', value: fiches.filter(f => f.statut_validation === 'validee').length, bg: '#F0FDF4', color: '#166534' },
-                    { label: 'Rejetées', value: fiches.filter(f => f.statut_validation === 'rejetee').length, bg: '#FEF2F2', color: '#991B1B' },
-                    { label: 'En attente', value: fiches.filter(f => !f.statut_validation || f.statut_validation === 'en_attente').length, bg: '#FEF9C3', color: '#854D0E' },
-                  ].map(s => (
-                    <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 text-center">
-                      <div className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</div>
-                      <div className="text-xs mt-1" style={{ color: '#818387' }}>{s.label}</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3">
-                  <input type="text" placeholder="Rechercher par agent..."
-                    value={ficheSearch} onChange={e => setFicheSearch(e.target.value)}
-                    className="w-full px-4 py-2 rounded-xl border text-sm outline-none"
-                    style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
-                  <div className="flex flex-wrap gap-2">
-                    <input type="date" value={ficheFilterDate} onChange={e => setFicheFilterDate(e.target.value)}
-                      className="px-3 py-2 rounded-xl border text-xs outline-none" style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
-                    <select value={ficheFilterAgence} onChange={e => setFicheFilterAgence(e.target.value)}
-                      className="px-3 py-2 rounded-xl border text-xs outline-none" style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-                      <option value="tous">Toutes les agences</option>
-                      {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
-                    </select>
-                    <select value={ficheFilterStatut} onChange={e => setFicheFilterStatut(e.target.value)}
-                      className="px-3 py-2 rounded-xl border text-xs outline-none" style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-                      <option value="tous">Tous les statuts</option>
-                      <option value="validee">✅ Validée</option>
-                      <option value="rejetee">❌ Rejetée</option>
-                      <option value="a_corriger">🔄 À corriger</option>
-                      <option value="en_attente">⏳ En attente</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                  <div className="overflow-y-auto" style={{ maxHeight: '55vh' }}>
-                    <table className="w-full">
-                      <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
-                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                          {['Date', 'Agent', 'Agence', 'Collecté', 'Manquant', 'Statut'].map(h => (
-                            <th key={h} className="text-left px-3 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {fiches.filter(f => {
-                          const ms = ficheSearch === '' || `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(ficheSearch.toLowerCase())
-                          const ma = ficheFilterAgence === 'tous' || f.agents?.agence_id === ficheFilterAgence
-                          const mst = ficheFilterStatut === 'tous' || f.statut_validation === ficheFilterStatut
-                          const md = ficheFilterDate === '' || f.date === ficheFilterDate
-                          return ms && ma && mst && md
-                        }).map((f, i, arr) => {
-                          const manq = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
-                          return (
-                            <tr key={f.id} onClick={() => setSelectedFiche(f)}
-                              className="cursor-pointer hover:bg-gray-50 transition-colors"
-                              style={{ borderBottom: i < arr.length - 1 ? '1px solid #f8fafc' : 'none', backgroundColor: selectedFiche?.id === f.id ? '#EEF2FF' : undefined }}>
-                              <td className="px-3 py-3">
-                                <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
-                                  {new Date(f.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
-                                </div>
-                              </td>
-                              <td className="px-3 py-3">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0" style={{ backgroundColor: '#2A4E94' }}>
-                                    {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
-                                  </div>
-                                  <span className="text-xs font-medium" style={{ color: '#1a1a2e' }}>{f.agents?.prenom} {f.agents?.nom}</span>
-                                </div>
-                              </td>
-                              <td className="px-3 py-3 text-xs" style={{ color: '#818387' }}>{f.agents?.agences?.nom || '—'}</td>
-                              <td className="px-3 py-3">
-                                <span className="text-xs font-semibold" style={{ color: '#166534' }}>{(f.montant_mobilise || 0).toLocaleString()} F</span>
-                              </td>
-                              <td className="px-3 py-3">
-                                {manq > 0 ? (
-                                  <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                    style={{ backgroundColor: f.manquant_regle ? '#DCFCE7' : '#FEE2E2', color: f.manquant_regle ? '#166534' : '#991B1B' }}>
-                                    {f.manquant_regle ? '✅' : '⚠️'} {manq.toLocaleString()} F
-                                  </span>
-                                ) : <span className="text-xs" style={{ color: '#818387' }}>—</span>}
-                              </td>
-                              <td className="px-3 py-3">
-                                <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                  style={{ backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' : f.statut_validation === 'rejetee' ? '#FEE2E2' : f.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF', color: f.statut_validation === 'validee' ? '#166534' : f.statut_validation === 'rejetee' ? '#991B1B' : f.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94' }}>
-                                  {f.statut_validation === 'validee' ? '✅ Validée' : f.statut_validation === 'rejetee' ? '❌ Rejetée' : f.statut_validation === 'a_corriger' ? '🔄 À corriger' : '⏳ En attente'}
-                                </span>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              {selectedFiche && (
-                <div className="w-1/2">
-                  <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-                    <div className="p-5 border-b flex items-start justify-between" style={{ borderColor: '#f1f5f9' }}>
-                      <div>
-                        <div className="font-bold text-base" style={{ color: '#1a1a2e' }}>
-                          Fiche du {new Date(selectedFiche.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
-                        </div>
-                        <div className="text-sm mt-0.5" style={{ color: '#818387' }}>
-                          {selectedFiche.agents?.prenom} {selectedFiche.agents?.nom} · {selectedFiche.agents?.agences?.nom}
-                        </div>
-                      </div>
-                      <button type="button" onClick={() => setSelectedFiche(null)} className="p-1.5 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
-                    </div>
-                    <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-                      <div className="grid grid-cols-2 gap-2">
-                        {[
-                          { label: 'Comptes ouverts', value: selectedFiche.comptes_ouverts || 0 },
-                          { label: 'Comptes activés', value: selectedFiche.comptes_actives || 0 },
-                          { label: 'Montant collecté', value: (selectedFiche.montant_mobilise || 0).toLocaleString() + ' F' },
-                          { label: 'Montant rapporté', value: (selectedFiche.montant_rapporte || 0).toLocaleString() + ' F' },
-                          { label: 'Dépôts', value: selectedFiche.nb_depots || 0 },
-                          { label: 'Prospects', value: selectedFiche.prospects_visites || 0 },
-                        ].map(k => (
-                          <div key={k.label} className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
-                            <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
-                            <div className="font-bold text-sm mt-0.5" style={{ color: '#2A4E94' }}>{k.value}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                    {selectedFiche.commentaire_chef && (
-                      <div className="p-5">
-                        <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>COMMENTAIRE CHEF</h4>
-                        <p className="text-sm" style={{ color: '#1a1a2e' }}>{selectedFiche.commentaire_chef}</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          {selectedFiche && (
+  <div className="w-1/2">
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+      <FicheDetail
+        fiche={selectedFiche}
+        onClose={() => setSelectedFiche(null)}
+        canValidate={false}
+      />
+    </div>
+  </div>
+)}
 
           {/* ════ ALERTES ════ */}
           {tab === 'alertes' && (

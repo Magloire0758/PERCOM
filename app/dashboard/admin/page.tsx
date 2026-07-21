@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import FicheDetail from '@/components/FicheDetail'
 
 type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres' | 'equipes' | 'permissions' | 'manquants'
 
@@ -945,10 +946,17 @@ useEffect(() => {
     loadStats()
   }
 
-  async function loadFiches() {
+  async function loadFiches(resp?: any) {
+    // Pour admin et DG (sans filtre agence) :
     const { data } = await supabase
       .from('fiches_journalieres')
-      .select('*, agents!inner(nom, prenom, agence_id, agences(nom))')
+      .select(`
+        *,
+        agents!inner(nom, prenom, agence_id, agences(nom)),
+        reactivations(*),
+        augmentations_mise(*),
+        assurances_details(*)
+      `)
       .order('date', { ascending: false })
       .limit(100)
     setFiches(data || [])
@@ -1155,11 +1163,11 @@ useEffect(() => {
     <div className="min-h-screen flex" style={{ backgroundColor: '#f8fafc', fontFamily: 'var(--font-dm-sans)' }}>
 
       {/* ── SIDEBAR ── */}
-      <div className={`flex-shrink-0 transition-all duration-300 ${sidebarOpen ? 'w-56' : 'w-16'}`}
+      <div className={`shrink-0 transition-all duration-300 ${sidebarOpen ? 'w-56' : 'w-16'}`}
         style={{ backgroundColor: '#0f172a', minHeight: '100vh', position: 'sticky', top: 0 }}>
         {/* Logo */}
         <div className="p-4 border-b flex items-center gap-3" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm flex-shrink-0"
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0"
             style={{ backgroundColor: '#2A4E94', color: 'white' }}>P</div>
           {sidebarOpen && (
             <div>
@@ -1179,7 +1187,7 @@ useEffect(() => {
                 backgroundColor: tab === item.key ? '#2A4E94' : 'transparent',
                 color: tab === item.key ? 'white' : 'rgba(255,255,255,0.55)',
               }}>
-              <span className="text-base flex-shrink-0">{item.icon}</span>
+              <span className="text-base shrink-0">{item.icon}</span>
               {sidebarOpen && (
                 <span className="text-xs">{item.label}</span>
               )}
@@ -1298,7 +1306,7 @@ useEffect(() => {
                   { label: 'Fiches non validées', value: stats.fichesNonValides, color: '#2A4E94', bg: '#EEF2FF', icon: '📋' },
                 ].map(s => (
                   <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
                       style={{ backgroundColor: s.bg }}>{s.icon}</div>
                     <div>
                       <div className="font-bold text-lg" style={{ color: s.color }}>{s.value}</div>
@@ -1748,7 +1756,7 @@ useEffect(() => {
                     }}>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
                           style={{ backgroundColor: '#2A4E94' }}>
                           {a.prenom?.[0]}{a.nom?.[0]}
                         </div>
@@ -2325,7 +2333,7 @@ useEffect(() => {
                       </td>
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
                             style={{ backgroundColor: '#2A4E94' }}>
                             {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
                           </div>
@@ -2419,159 +2427,23 @@ useEffect(() => {
 
     {/* ── PANNEAU DÉTAIL FICHE ── */}
     {selectedFiche && (
-      <div className="w-1/2 space-y-4">
-        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+  <div className="w-1/2">
+    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+      <FicheDetail
+        fiche={selectedFiche}
+        onClose={() => setSelectedFiche(null)}
+        canValidate={true}
+        onValidate={() => {
+          setValidationFiche(selectedFiche)
+          setValidationStatut('validee')
+          setValidationCommentaire('')
+          setShowValidationModal(true)
+        }}
+      />
+    </div>
+  </div>
+)}
 
-          {/* Header */}
-          <div className="p-5 border-b flex items-start justify-between"
-            style={{ borderColor: '#f1f5f9' }}>
-            <div>
-              <div className="font-bold text-base" style={{ color: '#1a1a2e' }}>
-                Fiche du {new Date(selectedFiche.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-              </div>
-              <div className="text-sm mt-0.5" style={{ color: '#818387' }}>
-                {selectedFiche.agents?.prenom} {selectedFiche.agents?.nom} · {selectedFiche.agents?.agences?.nom}
-              </div>
-              <div className="flex gap-2 mt-2">
-                <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                  style={{
-                    backgroundColor: selectedFiche.valide_chef ? '#DCFCE7' : '#FEF9C3',
-                    color: selectedFiche.valide_chef ? '#166534' : '#854D0E'
-                  }}>
-                  {selectedFiche.valide_chef ? '✅ Validée' : '⏳ En attente de validation'}
-                </span>
-              </div>
-            </div>
-            <button type="button" onClick={() => setSelectedFiche(null)}
-              className="p-1.5 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
-          </div>
-
-          {/* KPIs */}
-          <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-            <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>INDICATEURS</h4>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { label: 'Comptes ouverts', value: selectedFiche.comptes_ouverts || 0 },
-                { label: 'Comptes activés', value: selectedFiche.comptes_actives || 0 },
-                { label: 'Montant collecté', value: (selectedFiche.montant_mobilise || 0).toLocaleString() + ' F' },
-                { label: 'Montant rapporté', value: (selectedFiche.montant_rapporte || 0).toLocaleString() + ' F' },
-                { label: 'Nombre de dépôts', value: selectedFiche.nb_depots || 0 },
-                { label: 'Prospects visités', value: selectedFiche.prospects_visites || 0 },
-                { label: 'Clients suivis', value: selectedFiche.clients_suivis || 0 },
-                { label: 'Assurances vendues', value: selectedFiche.assurances_vendues || 0 },
-              ].map(k => (
-                <div key={k.label} className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
-                  <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
-                  <div className="font-bold text-sm mt-0.5" style={{ color: '#2A4E94' }}>{k.value}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Manquant */}
-          {(() => {
-            const manq = Math.max(0, (selectedFiche.montant_mobilise || 0) - (selectedFiche.montant_rapporte || 0))
-            return manq > 0 ? (
-              <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-                <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>MANQUANT</h4>
-                <div className="rounded-2xl p-4 flex items-center justify-between"
-                  style={{
-                    backgroundColor: selectedFiche.manquant_regle ? '#F0FDF4' : '#FEF2F2',
-                    border: `1px solid ${selectedFiche.manquant_regle ? '#BBF7D0' : '#FECACA'}`
-                  }}>
-                  <div>
-                    <div className="font-bold text-xl"
-                      style={{ color: selectedFiche.manquant_regle ? '#166534' : '#E4322C' }}>
-                      {manq.toLocaleString()} FCFA
-                    </div>
-                    <div className="text-xs mt-0.5"
-                      style={{ color: selectedFiche.manquant_regle ? '#166534' : '#991B1B' }}>
-                      {selectedFiche.manquant_regle ? '✅ Manquant réglé' : '⚠️ Non réglé'}
-                    </div>
-                  </div>
-                  {!selectedFiche.manquant_regle && (
-                    <button type="button" onClick={() => confirmerManquantAdmin(selectedFiche.id)}
-                      className="px-4 py-2 rounded-xl text-sm font-semibold text-white"
-                      style={{ backgroundColor: '#2A4E94' }}>
-                      💰 Confirmer règlement
-                    </button>
-                  )}
-                </div>
-              </div>
-            ) : null
-          })()}
-
-        {/* Observations */}
-        {selectedFiche.observations && (
-          <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-            <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>OBSERVATIONS</h4>
-            <p className="text-sm" style={{ color: '#1a1a2e' }}>{selectedFiche.observations}</p>
-          </div>
-        )}
-
-        {/* Commentaire chef */}
-        {selectedFiche.commentaire_chef && (
-          <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-            <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>COMMENTAIRE CHEF</h4>
-            <div className="rounded-xl p-3 flex items-start gap-3"
-              style={{
-                backgroundColor:
-                  selectedFiche.statut_validation === 'validee' ? '#F0FDF4' :
-                  selectedFiche.statut_validation === 'rejetee' ? '#FEF2F2' : '#FEF9C3',
-                border: `1px solid ${
-                  selectedFiche.statut_validation === 'validee' ? '#BBF7D0' :
-                  selectedFiche.statut_validation === 'rejetee' ? '#FECACA' : '#FDE68A'}`
-              }}>
-              <span className="text-base flex-shrink-0">
-                {selectedFiche.statut_validation === 'validee' ? '✅' :
-                selectedFiche.statut_validation === 'rejetee' ? '❌' : '🔄'}
-              </span>
-              <p className="text-sm"
-                style={{
-                  color:
-                    selectedFiche.statut_validation === 'validee' ? '#166534' :
-                    selectedFiche.statut_validation === 'rejetee' ? '#991B1B' : '#854D0E'
-                }}>
-                {selectedFiche.commentaire_chef}
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Heure de soumission */}
-        {selectedFiche.heure_soumission && (
-          <div className="px-5 py-2 border-b" style={{ borderColor: '#f1f5f9' }}>
-            <span className="text-xs" style={{ color: '#818387' }}>
-              🕐 Soumise le {new Date(selectedFiche.heure_soumission).toLocaleDateString('fr-FR', {
-                day: 'numeric', month: 'long', year: 'numeric'
-              })} à {new Date(selectedFiche.heure_soumission).toLocaleTimeString('fr-FR', {
-                hour: '2-digit', minute: '2-digit'
-              })}
-            </span>
-          </div>
-        )}
-          {/* Actions */}
-          <div className="p-5 flex gap-3">
-            <button type="button"
-              onClick={() => {
-                setValidationFiche(selectedFiche)
-                setValidationStatut('validee')
-                setValidationCommentaire('')
-                setShowValidationModal(true)
-              }}
-              className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
-              style={{ backgroundColor: '#166534' }}>
-              ✅ Valider / Décision
-            </button>
-            <button type="button" onClick={() => setDeleteFicheConfirm(selectedFiche.id)}
-              className="px-4 py-3 rounded-xl text-sm font-semibold"
-              style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
-              🗑️
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
   </div>
 )}
 
@@ -2637,7 +2509,7 @@ useEffect(() => {
               borderColor: alerte.type === 'error' ? '#FECACA'
                 : alerte.type === 'warning' ? '#FDE68A' : '#C7D2FE'
             }}>
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
               style={{
                 backgroundColor: alerte.type === 'error' ? '#FEF2F2'
                   : alerte.type === 'warning' ? '#FEF9C3' : '#EEF2FF'
@@ -2668,7 +2540,7 @@ useEffect(() => {
             </div>
             <button type="button"
               onClick={() => setTab(alerte.action as Tab)}
-              className="px-3 py-1.5 rounded-xl text-xs font-semibold flex-shrink-0"
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0"
               style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
               Voir →
             </button>
@@ -3020,7 +2892,7 @@ useEffect(() => {
                 {equipeMembers.map(membre => (
                   <div key={membre.id} className="flex items-center gap-3 p-3 rounded-xl"
                     style={{ backgroundColor: '#f8fafc' }}>
-                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
                       style={{ backgroundColor: selectedEquipe.chef_id === membre.id ? '#854D0E' : '#2A4E94' }}>
                       {membre.prenom?.[0]}{membre.nom?.[0]}
                     </div>
@@ -3262,7 +3134,7 @@ useEffect(() => {
                           <td key={role} className="px-5 py-4 text-center">
                             <button type="button"
                               onClick={() => togglePermission(role, perm.key)}
-                              className="relative w-11 h-6 rounded-full transition-all mx-auto flex-shrink-0"
+                              className="relative w-11 h-6 rounded-full transition-all mx-auto shrink-0"
                               style={{ backgroundColor: active ? '#2A4E94' : '#e2e8f0' }}>
                               <div className="absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm"
                                 style={{ left: active ? '23px' : '2px' }} />
@@ -3430,7 +3302,7 @@ useEffect(() => {
                       </td>
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
                             style={{ backgroundColor: '#E4322C' }}>
                             {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
                           </div>
@@ -4785,7 +4657,7 @@ useEffect(() => {
                   disabled={agentZoneLoading}
                   className="w-full flex items-center gap-3 p-3 rounded-xl text-left transition-all hover:opacity-80"
                   style={{ backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}>
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm text-white flex-shrink-0"
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm text-white shrink-0"
                     style={{ backgroundColor: '#2A4E94' }}>
                     {zone.numero}
                   </div>
@@ -4858,7 +4730,7 @@ useEffect(() => {
                   disabled={equipeZoneLoading}
                   className="w-full flex items-center gap-3 p-3 rounded-xl text-left transition-all hover:opacity-80"
                   style={{ backgroundColor: '#f8fafc', border: '1px solid #f1f5f9' }}>
-                  <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm text-white flex-shrink-0"
+                  <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm text-white shrink-0"
                     style={{ backgroundColor: '#166534' }}>
                     {zone.numero}
                   </div>

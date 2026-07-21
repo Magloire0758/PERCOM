@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import FicheDetail from '@/components/FicheDetail'
 
 type ActiveTab = 'accueil' | 'fiches' | 'equipe' | 'manquants' | 'performance' | 'messages' | 'profil'
 
@@ -133,10 +134,12 @@ export default function DashboardChef() {
 
   async function loadFiches(agentId: string) {
     const { data: fiche } = await supabase.from('fiches_journalieres')
-      .select('*').eq('agent_id', agentId).eq('date', today).maybeSingle()
+      .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
+      .eq('agent_id', agentId).eq('date', today).maybeSingle()
     setFicheDuJour(fiche)
     const { data: all } = await supabase.from('fiches_journalieres')
-      .select('*').eq('agent_id', agentId).order('date', { ascending: false })
+      .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
+      .eq('agent_id', agentId).order('date', { ascending: false })
     setFiches(all || [])
   }
 
@@ -224,7 +227,8 @@ export default function DashboardChef() {
     setSelectedMember(member)
     setMemberLoadingFiches(true)
     const { data } = await supabase.from('fiches_journalieres')
-      .select('*').eq('agent_id', member.id)
+      .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
+      .eq('agent_id', member.id)
       .order('date', { ascending: false }).limit(15)
     setMemberFiches(data || [])
     setMemberLoadingFiches(false)

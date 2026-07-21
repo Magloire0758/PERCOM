@@ -57,7 +57,6 @@ export default function FicheJournaliere() {
   // Formulaire principal
   const [form, setForm] = useState({
     comptes_ouverts_dat: '',
-    comptes_actives: '',
     montant_smart: '',
     montant_caisse: '',
     commission_jour: '',
@@ -171,7 +170,6 @@ export default function FicheJournaliere() {
         // Comptes
         comptes_ouverts_dat: parseInt(form.comptes_ouverts_dat) || 0,
         comptes_ouverts: parseInt(form.comptes_ouverts_dat) || 0, // compatibilité
-        comptes_actives: parseInt(form.comptes_actives) || 0,
         // Montants
         montant_smart: parseFloat(form.montant_smart) || 0,
         montant_caisse: parseFloat(form.montant_caisse) || 0,
@@ -379,16 +377,11 @@ export default function FicheJournaliere() {
             titre="🏦 Comptes"
             ouverte={sectionsOuvertes.comptes}
             onToggle={() => toggleSection('comptes')}>
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Comptes ouverts (DAT)" objectif="≥ 6"
-                value={form.comptes_ouverts_dat}
-                onChange={v => setForm(p => ({ ...p, comptes_ouverts_dat: v }))}
-                type="number" placeholder="0" />
-              <Field label="Comptes activés" objectif="≥ 4"
-                value={form.comptes_actives}
-                onChange={v => setForm(p => ({ ...p, comptes_actives: v }))}
-                type="number" placeholder="0" />
-            </div>
+            <Field label="Comptes ouverts (DAT)" objectif="≥ 6"
+  value={form.comptes_ouverts_dat}
+  onChange={v => setForm(p => ({ ...p, comptes_ouverts_dat: v }))}
+  type="number" placeholder="0" />
+
           </SectionCard>
 
           {/* ── SECTION : Montants ── */}
@@ -454,10 +447,10 @@ export default function FicheJournaliere() {
             onToggle={() => toggleSection('depots')}>
             <div className="space-y-4">
               <div className="p-3 rounded-xl text-xs" style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-                ℹ️ Renseignez les montants par type : PE (Prêt Épargne), DAT (Dépôt À Terme), DAV (Dépôt À Vue)
+                ℹ️ Renseignez les montants par type : PE (Plan Épargne), DAT (Dépôt À Terme), DAV (Dépôt À Vue)
               </div>
               <div className="grid grid-cols-1 gap-4">
-                <Field label="Montant PE (Prêt Épargne)"
+                <Field label="Montant PE (Plan Épargne)"
                   value={form.montant_depot_pe}
                   onChange={v => setForm(p => ({ ...p, montant_depot_pe: v }))}
                   type="number" suffix="F" placeholder="0" />
