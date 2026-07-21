@@ -82,13 +82,26 @@ const [objectifForm, setObjectifForm] = useState({
   date_debut: '',
   date_fin: '',
   statut_objectif: 'actif',
-  cible_comptes: 6,
-  cible_comptes_actives: 4,
-  cible_montant: 25000,
-  cible_depots: 5,
-  cible_visites_prospects: 50,
-  cible_clients_suivis: 25,
-  cible_assurances: 0,
+  // Montants
+  cible_montant_smart: 0,
+  cible_montant_caisse: 0,
+  cible_commissions: 0,
+  // Comptes & adhésions
+  cible_comptes_dat: 6,
+  cible_adhesions: 5,
+  cible_lyde_cash: 3,
+  // Réactivations & augmentations
+  cible_reactivations_nb: 3,
+  cible_reactivations_montant: 0,
+  cible_augmentations_nb: 3,
+  cible_augmentations_montant: 0,
+  // Assurances
+  cible_assurances_nb: 0,
+  cible_assurances_montant: 0,
+  // Autres dépôts
+  cible_depot_pe: 0,
+  cible_depot_dat: 0,
+  cible_depot_dav: 0,
   description: '',
 })
 
@@ -573,13 +586,21 @@ useEffect(() => {
       date_debut: objectifForm.date_debut || null,
       date_fin: objectifForm.date_fin || null,
       statut_objectif: objectifForm.statut_objectif,
-      cible_comptes: objectifForm.cible_comptes,
-      cible_comptes_actives: objectifForm.cible_comptes_actives,
-      cible_montant: objectifForm.cible_montant,
-      cible_depots: objectifForm.cible_depots,
-      cible_visites_prospects: objectifForm.cible_visites_prospects,
-      cible_clients_suivis: objectifForm.cible_clients_suivis,
-      cible_assurances: objectifForm.cible_assurances,
+      cible_montant_smart: objectifForm.cible_montant_smart,
+      cible_montant_caisse: objectifForm.cible_montant_caisse,
+      cible_commissions: objectifForm.cible_commissions,
+      cible_comptes_dat: objectifForm.cible_comptes_dat,
+      cible_adhesions: objectifForm.cible_adhesions,
+      cible_lyde_cash: objectifForm.cible_lyde_cash,
+      cible_reactivations_nb: objectifForm.cible_reactivations_nb,
+      cible_reactivations_montant: objectifForm.cible_reactivations_montant,
+      cible_augmentations_nb: objectifForm.cible_augmentations_nb,
+      cible_augmentations_montant: objectifForm.cible_augmentations_montant,
+      cible_assurances_nb: objectifForm.cible_assurances_nb,
+      cible_assurances_montant: objectifForm.cible_assurances_montant,
+      cible_depot_pe: objectifForm.cible_depot_pe,
+      cible_depot_dat: objectifForm.cible_depot_dat,
+      cible_depot_dav: objectifForm.cible_depot_dav,
       description: objectifForm.description,
       mois: new Date().getMonth() + 1,
       annee: new Date().getFullYear(),
@@ -626,9 +647,13 @@ useEffect(() => {
       titre: '', type_periodicite: 'mensuel', type_cible: 'agent',
       agent_id: '', equipe_id: '', agence_id: '', zone_id: '',
       date_debut: '', date_fin: '', statut_objectif: 'actif',
-      cible_comptes: 6, cible_comptes_actives: 4, cible_montant: 25000,
-      cible_depots: 5, cible_visites_prospects: 50, cible_clients_suivis: 25,
-      cible_assurances: 0, description: '',
+      cible_montant_smart: 0, cible_montant_caisse: 0, cible_commissions: 0,
+      cible_comptes_dat: 6, cible_adhesions: 5, cible_lyde_cash: 3,
+      cible_reactivations_nb: 3, cible_reactivations_montant: 0,
+      cible_augmentations_nb: 3, cible_augmentations_montant: 0,
+      cible_assurances_nb: 0, cible_assurances_montant: 0,
+      cible_depot_pe: 0, cible_depot_dat: 0, cible_depot_dav: 0,
+      description: '',
     })
   }
   
@@ -651,13 +676,21 @@ useEffect(() => {
       date_debut: obj.date_debut || '',
       date_fin: obj.date_fin || '',
       statut_objectif: obj.statut_objectif || 'actif',
-      cible_comptes: obj.cible_comptes || 6,
-      cible_comptes_actives: obj.cible_comptes_actives || 4,
-      cible_montant: obj.cible_montant || 25000,
-      cible_depots: obj.cible_depots || 5,
-      cible_visites_prospects: obj.cible_visites_prospects || 50,
-      cible_clients_suivis: obj.cible_clients_suivis || 25,
-      cible_assurances: obj.cible_assurances || 0,
+      cible_montant_smart: obj.cible_montant_smart || 0,
+      cible_montant_caisse: obj.cible_montant_caisse || 0,
+      cible_commissions: obj.cible_commissions || 0,
+      cible_comptes_dat: obj.cible_comptes_dat || 6,
+      cible_adhesions: obj.cible_adhesions || 5,
+      cible_lyde_cash: obj.cible_lyde_cash || 3,
+      cible_reactivations_nb: obj.cible_reactivations_nb || 3,
+      cible_reactivations_montant: obj.cible_reactivations_montant || 0,
+      cible_augmentations_nb: obj.cible_augmentations_nb || 3,
+      cible_augmentations_montant: obj.cible_augmentations_montant || 0,
+      cible_assurances_nb: obj.cible_assurances_nb || 0,
+      cible_assurances_montant: obj.cible_assurances_montant || 0,
+      cible_depot_pe: obj.cible_depot_pe || 0,
+      cible_depot_dat: obj.cible_depot_dat || 0,
+      cible_depot_dav: obj.cible_depot_dav || 0,
       description: obj.description || '',
     })
     setShowObjectifModal(true)
@@ -2146,23 +2179,23 @@ useEffect(() => {
                   </div>
                 </div>
 
-                {/* KPIs cibles */}
-                <div className="grid grid-cols-2 gap-2 mb-4">
-                  {[
-                    { label: 'Comptes', value: obj.cible_comptes },
-                    { label: 'Activés', value: obj.cible_comptes_actives },
-                    { label: 'Montant', value: (obj.cible_montant || 0).toLocaleString() + ' F' },
-                    { label: 'Dépôts', value: obj.cible_depots },
-                    { label: 'Prospects', value: obj.cible_visites_prospects },
-                    { label: 'Clients', value: obj.cible_clients_suivis },
-                  ].map(k => (
-                    <div key={k.label} className="rounded-lg p-2"
-                      style={{ backgroundColor: '#f8fafc' }}>
-                      <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
-                      <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{k.value}</div>
-                    </div>
-                  ))}
-                </div>
+{/* KPIs cibles */}
+<div className="grid grid-cols-2 gap-2 mb-4">
+  {[
+    { label: 'SMART', value: (obj.cible_montant_smart || 0).toLocaleString() + ' F' },
+    { label: 'Caisse', value: (obj.cible_montant_caisse || 0).toLocaleString() + ' F' },
+    { label: 'Commissions', value: (obj.cible_commissions || 0).toLocaleString() + ' F' },
+    { label: 'Comptes DAT', value: obj.cible_comptes_dat || 0 },
+    { label: 'Adhésions', value: obj.cible_adhesions || 0 },
+    { label: 'Assurances', value: obj.cible_assurances_nb || 0 },
+  ].map(k => (
+    <div key={k.label} className="rounded-lg p-2"
+      style={{ backgroundColor: '#f8fafc' }}>
+      <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
+      <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{k.value}</div>
+    </div>
+  ))}
+</div>
 
                 {/* Dates */}
                 {(obj.date_debut || obj.date_fin) && (
@@ -3923,43 +3956,105 @@ useEffect(() => {
           )}
         </div>
 
-        {/* KPIs cibles */}
-        <div className="rounded-2xl border p-4 space-y-4" style={{ borderColor: '#e2e8f0' }}>
-          <div className="text-xs font-bold" style={{ color: '#1a1a2e' }}>📊 Indicateurs cibles</div>
-          <div className="grid grid-cols-2 gap-4">
-            {[
-              { key: 'cible_comptes', label: 'Comptes à ouvrir', placeholder: '6' },
-              { key: 'cible_comptes_actives', label: 'Comptes à activer', placeholder: '4' },
-              { key: 'cible_depots', label: 'Nombre de dépôts', placeholder: '5' },
-              { key: 'cible_assurances', label: 'Assurances à vendre', placeholder: '0' },
-              { key: 'cible_visites_prospects', label: 'Prospects à visiter', placeholder: '50' },
-              { key: 'cible_clients_suivis', label: 'Clients à suivre', placeholder: '25' },
-            ].map(field => (
-              <div key={field.key}>
-                <label className="block text-xs font-medium mb-1.5" style={{ color: '#818387' }}>
-                  {field.label}
-                </label>
-                <input type="number" min="0"
-                  value={(objectifForm as any)[field.key]}
-                  onChange={e => setObjectifForm(p => ({ ...p, [field.key]: parseInt(e.target.value) || 0 }))}
-                  className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
-                  style={{ borderColor: '#e2e8f0' }}
-                  placeholder={field.placeholder} />
-              </div>
-            ))}
-          </div>
-          <div>
-            <label className="block text-xs font-medium mb-1.5" style={{ color: '#818387' }}>
-              Montant cible (FCFA)
-            </label>
-            <input type="number" min="0"
-              value={objectifForm.cible_montant}
-              onChange={e => setObjectifForm(p => ({ ...p, cible_montant: parseFloat(e.target.value) || 0 }))}
-              className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
-              style={{ borderColor: '#e2e8f0' }}
-              placeholder="25000" />
-          </div>
+{/* KPIs cibles */}
+<div className="space-y-4">
+
+  {/* 💰 Montants */}
+  <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+    <div className="text-xs font-bold mb-3" style={{ color: '#166534' }}>💰 Montants collectés (FCFA)</div>
+    <div className="grid grid-cols-3 gap-3">
+      {[
+        { key: 'cible_montant_smart', label: 'Montant SMART' },
+        { key: 'cible_montant_caisse', label: 'Montant Caisse' },
+        { key: 'cible_commissions', label: 'Commissions' },
+      ].map(field => (
+        <div key={field.key}>
+          <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+          <input type="number" min="0" value={(objectifForm as any)[field.key]}
+            onChange={e => setObjectifForm(p => ({ ...p, [field.key]: parseFloat(e.target.value) || 0 }))}
+            className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
         </div>
+      ))}
+    </div>
+  </div>
+
+  {/* 🏦 Comptes & Adhésions */}
+  <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+    <div className="text-xs font-bold mb-3" style={{ color: '#2A4E94' }}>🏦 Comptes & Adhésions</div>
+    <div className="grid grid-cols-3 gap-3">
+      {[
+        { key: 'cible_comptes_dat', label: 'Comptes DAT' },
+        { key: 'cible_adhesions', label: 'Adhésions' },
+        { key: 'cible_lyde_cash', label: 'Lydé Cash' },
+      ].map(field => (
+        <div key={field.key}>
+          <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+          <input type="number" min="0" value={(objectifForm as any)[field.key]}
+            onChange={e => setObjectifForm(p => ({ ...p, [field.key]: parseInt(e.target.value) || 0 }))}
+            className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
+        </div>
+      ))}
+    </div>
+  </div>
+
+  {/* 🔄 Réactivations & Augmentations */}
+  <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+    <div className="text-xs font-bold mb-3" style={{ color: '#854D0E' }}>🔄 Réactivations & Augmentations</div>
+    <div className="grid grid-cols-2 gap-3">
+      {[
+        { key: 'cible_reactivations_nb', label: 'Réactiv. (nb)', type: 'int' },
+        { key: 'cible_reactivations_montant', label: 'Réactiv. (montant F)', type: 'float' },
+        { key: 'cible_augmentations_nb', label: 'Augment. (nb)', type: 'int' },
+        { key: 'cible_augmentations_montant', label: 'Augment. (montant F)', type: 'float' },
+      ].map(field => (
+        <div key={field.key}>
+          <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+          <input type="number" min="0" value={(objectifForm as any)[field.key]}
+            onChange={e => setObjectifForm(p => ({ ...p, [field.key]: (field.type === 'int' ? parseInt(e.target.value) : parseFloat(e.target.value)) || 0 }))}
+            className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
+        </div>
+      ))}
+    </div>
+  </div>
+
+  {/* 🛡️ Assurances */}
+  <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+    <div className="text-xs font-bold mb-3" style={{ color: '#166534' }}>🛡️ Assurances</div>
+    <div className="grid grid-cols-2 gap-3">
+      {[
+        { key: 'cible_assurances_nb', label: 'Nombre de contrats', type: 'int' },
+        { key: 'cible_assurances_montant', label: 'Montant (F)', type: 'float' },
+      ].map(field => (
+        <div key={field.key}>
+          <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+          <input type="number" min="0" value={(objectifForm as any)[field.key]}
+            onChange={e => setObjectifForm(p => ({ ...p, [field.key]: (field.type === 'int' ? parseInt(e.target.value) : parseFloat(e.target.value)) || 0 }))}
+            className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
+        </div>
+      ))}
+    </div>
+  </div>
+
+  {/* 🏧 Autres dépôts */}
+  <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+    <div className="text-xs font-bold mb-3" style={{ color: '#2A4E94' }}>🏧 Autres dépôts (FCFA)</div>
+    <div className="grid grid-cols-3 gap-3">
+      {[
+        { key: 'cible_depot_pe', label: 'PE' },
+        { key: 'cible_depot_dat', label: 'DAT' },
+        { key: 'cible_depot_dav', label: 'DAV' },
+      ].map(field => (
+        <div key={field.key}>
+          <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+          <input type="number" min="0" value={(objectifForm as any)[field.key]}
+            onChange={e => setObjectifForm(p => ({ ...p, [field.key]: parseFloat(e.target.value) || 0 }))}
+            className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
+        </div>
+      ))}
+    </div>
+  </div>
+
+</div>
 
         {/* Boutons */}
         <div className="flex gap-3">

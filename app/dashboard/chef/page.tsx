@@ -562,7 +562,7 @@ export default function DashboardChef() {
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-2xl p-4 flex items-center gap-3"
                 style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
                   style={{ backgroundColor: '#FEF9C3' }}>👨‍💼</div>
                 <div>
                   <div className="text-xs" style={{ color: sub }}>Chef de</div>
@@ -577,7 +577,7 @@ export default function DashboardChef() {
               </div>
               <div className="rounded-2xl p-4 flex items-start gap-3"
                 style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
                   style={{ backgroundColor: '#F0FDF4' }}>🗺️</div>
                 <div className="flex-1">
                   <div className="text-xs mb-1" style={{ color: sub }}>Mes zones</div>
@@ -820,7 +820,7 @@ export default function DashboardChef() {
                         <button type="button"
                           onClick={() => isSelected ? setSelectedMember(null) : selectMember(member)}
                           className="w-full p-4 flex items-center gap-3 text-left">
-                          <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white flex-shrink-0"
+                          <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white shrink-0"
                             style={{ backgroundColor: '#2A4E94' }}>
                             {member.prenom?.[0]}{member.nom?.[0]}
                           </div>
@@ -1124,7 +1124,7 @@ export default function DashboardChef() {
                     <button key={contact.id} type="button" onClick={() => setSelectedContact(contact)}
                       className="w-full rounded-2xl p-4 flex items-center gap-3 text-left"
                       style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                      <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white flex-shrink-0"
+                      <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white shrink-0"
                         style={{ backgroundColor: '#2A4E94' }}>
                         {contact.prenom?.[0]}{contact.nom?.[0]}
                       </div>

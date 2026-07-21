@@ -404,10 +404,10 @@ export default function DashboardResponsable() {
     <div className="min-h-screen flex" style={{ backgroundColor: '#f8fafc', fontFamily: 'var(--font-dm-sans)' }}>
 
       {/* SIDEBAR */}
-      <div className={`flex-shrink-0 transition-all duration-300 ${sidebarOpen ? 'w-56' : 'w-16'}`}
+      <div className={`shrink-0 transition-all duration-300 ${sidebarOpen ? 'w-56' : 'w-16'}`}
         style={{ backgroundColor: '#0f172a', minHeight: '100vh', position: 'sticky', top: 0 }}>
         <div className="p-4 border-b flex items-center gap-3" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm flex-shrink-0"
+          <div className="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-sm shrink-0"
             style={{ backgroundColor: '#2A4E94', color: 'white' }}>P</div>
           {sidebarOpen && (
             <div>
@@ -426,7 +426,7 @@ export default function DashboardResponsable() {
             <button key={item.key} type="button" onClick={() => setTab(item.key as Tab)}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all"
               style={{ backgroundColor: tab === item.key ? '#2A4E94' : 'transparent', color: tab === item.key ? 'white' : 'rgba(255,255,255,0.55)' }}>
-              <span className="text-base flex-shrink-0">{item.icon}</span>
+              <span className="text-base shrink-0">{item.icon}</span>
               {sidebarOpen && <span className="text-xs">{item.label}</span>}
             </button>
           ))}
@@ -1008,7 +1008,7 @@ export default function DashboardResponsable() {
                   {alertesData.map((alerte, i) => (
                     <div key={i} className="bg-white rounded-2xl border p-4 flex items-start gap-4"
                       style={{ borderColor: alerte.type === 'error' ? '#FECACA' : alerte.type === 'warning' ? '#FDE68A' : '#C7D2FE' }}>
-                      <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+                      <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
                         style={{ backgroundColor: alerte.type === 'error' ? '#FEF2F2' : alerte.type === 'warning' ? '#FEF9C3' : '#EEF2FF' }}>
                         {alerte.type === 'error' ? '🚨' : alerte.type === 'warning' ? '⚠️' : 'ℹ️'}
                       </div>
@@ -1023,7 +1023,7 @@ export default function DashboardResponsable() {
                         <div className="text-xs mt-0.5" style={{ color: '#818387' }}>{alerte.detail}</div>
                       </div>
                       <button type="button" onClick={() => setTab(alerte.action as Tab)}
-                        className="px-3 py-1.5 rounded-xl text-xs font-semibold flex-shrink-0"
+                        className="px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0"
                         style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>Voir →</button>
                     </div>
                   ))}

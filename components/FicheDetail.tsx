@@ -58,7 +58,7 @@ export default function FicheDetail({
         </div>
         {onClose && (
           <button type="button" onClick={onClose}
-            className="p-1.5 rounded-lg flex-shrink-0"
+            className="p-1.5 rounded-lg shrink-0"
             style={{ backgroundColor: bg, color: sub }}>✕</button>
         )}
       </div>

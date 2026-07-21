@@ -456,7 +456,7 @@ export default function DashboardAgent() {
 {/* Badge équipe */}
 <div className="rounded-2xl p-4 flex items-center gap-3"
   style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
     style={{ backgroundColor: '#EEF2FF' }}>👥</div>
   <div>
     <div className="text-xs" style={{ color: sub }}>Mon équipe</div>
@@ -481,7 +481,7 @@ export default function DashboardAgent() {
 {/* Zones assignées */}
 <div className="rounded-2xl p-4 flex items-start gap-3"
   style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
     style={{ backgroundColor: '#F0FDF4' }}>🗺️</div>
   <div className="flex-1">
     <div className="text-xs mb-1" style={{ color: sub }}>Mes zones</div>
@@ -1061,7 +1061,7 @@ export default function DashboardAgent() {
                       onClick={() => setSelectedContact(contact)}
                       className="w-full rounded-2xl p-4 flex items-center gap-3 text-left"
                       style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                      <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white flex-shrink-0"
+                      <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white shrink-0"
                         style={{ backgroundColor: '#2A4E94' }}>
                         {contact.prenom?.[0]}{contact.nom?.[0]}
                       </div>
@@ -1305,7 +1305,7 @@ export default function DashboardAgent() {
                     </div>
                     <button type="button"
                       onClick={() => saveNotifPrefs(pref.key, !(notifPrefs as any)[pref.key])}
-                      className="relative w-11 h-6 rounded-full transition-all flex-shrink-0"
+                      className="relative w-11 h-6 rounded-full transition-all shrink-0"
                       style={{ backgroundColor: (notifPrefs as any)[pref.key] ? '#2A4E94' : '#e2e8f0' }}>
                       <div className="absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm"
                         style={{ left: (notifPrefs as any)[pref.key] ? '23px' : '2px' }} />
