@@ -17,8 +17,8 @@ export default function DashboardAdmin() {
   // Data
   const [stats, setStats] = useState({
     totalAgents: 0, totalAgences: 0,
-    collecteAujourdhui: 0, collecteMois: 0,
-    agentsEnAttente: 0, manquantsTotal: 0,
+    collecteAujourdhui: 0, collecteMois: 0, commissionsMois: 0,
+    agentsEnAttente: 0, manquantsTotal: 0, surplusTotal: 0, nbEcarts: 0,
     fichesNonValides: 0, tauxPerformance: 0,
   })
   const [topAgents, setTopAgents] = useState<any[]>([])
@@ -189,7 +189,7 @@ const [equipeZoneLoading, setEquipeZoneLoading] = useState(false)
 
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-
+  const getEcart = (f: any) => (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
 useEffect(() => {
   if (tab === 'agents') loadAgentsData()
   if (tab === 'objectifs') loadObjectifs()
@@ -272,38 +272,39 @@ useEffect(() => {
     ] = await Promise.all([
       supabase.from('agents').select('*', { count: 'exact', head: true }).not('role', 'eq', 'admin'),
       supabase.from('agences').select('*', { count: 'exact', head: true }),
-      supabase.from('fiches_journalieres').select('montant_mobilise, montant_rapporte').eq('date', today),
-      supabase.from('fiches_journalieres').select('montant_mobilise, montant_rapporte, agent_id').gte('date', moisDebut),
+      supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise').eq('date', today),
+      supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise, commission_jour, agent_id').gte('date', moisDebut),
       supabase.from('agents').select('*', { count: 'exact', head: true }).eq('statut', 'en_attente'),
-      supabase.from('fiches_journalieres').select('montant_mobilise, montant_rapporte').eq('manquant_regle', false),
+      supabase.from('fiches_journalieres').select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte').eq('manquant_regle', false),
       supabase.from('fiches_journalieres').select('*', { count: 'exact', head: true }).eq('valide_chef', false),
     ])
 
-    const collecteAujourdhui = (fichesAujourdhui || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
-    const collecteMois = (fichesMois || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
-    const manquantsTotal = (manquants || []).reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
+    const collecteAujourdhui = (fichesAujourdhui || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
+    const collecteMois = (fichesMois || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
+    const commissionsMois = (fichesMois || []).reduce((s, f) => s + (f.commission_jour || 0), 0)
+
+    let manquantsTotal = 0, surplusTotal = 0, nbEcarts = 0
+    ;(manquants || []).forEach(f => {
+      const e = getEcart(f)
+      if (e > 0) { manquantsTotal += e; nbEcarts++ }
+      else if (e < 0) { surplusTotal += Math.abs(e); nbEcarts++ }
+    })
 
     setStats({
       totalAgents: totalAgents || 0,
       totalAgences: totalAgences || 0,
       collecteAujourdhui,
       collecteMois,
+      commissionsMois,
       agentsEnAttente: agentsEnAttente || 0,
       manquantsTotal,
+      surplusTotal,
+      nbEcarts,
       fichesNonValides: fichesNonValides || 0,
       tauxPerformance: collecteMois > 0 ? Math.min(100, Math.round((collecteMois / (25000 * 30)) * 100)) : 0,
     })
 
-    // Top agents du mois
-    const agentCollecte: Record<string, number> = {}
-    ;(fichesMois || []).forEach(f => {
-      agentCollecte[f.agent_id] = (agentCollecte[f.agent_id] || 0) + (f.montant_mobilise || 0)
-    })
-    const topIds = Object.entries(agentCollecte).sort((a, b) => b[1] - a[1]).slice(0, 5)
-    if (topIds.length > 0) {
-      const { data: topData } = await supabase.from('agents').select('id, nom, prenom, agences(nom)').in('id', topIds.map(t => t[0]))
-      setTopAgents(topIds.map(([id, montant]) => ({ ...topData?.find(a => a.id === id), montant })))
-    }
+
 
     // Alertes
     const alertesList = []
@@ -312,6 +313,15 @@ useEffect(() => {
     if ((fichesNonValides || 0) > 0) alertesList.push({ type: 'info', message: `${fichesNonValides} fiche(s) en attente de validation`, action: 'fiches' })
     setAlertes(alertesList)
 
+        // Top agents du mois
+        const agentCollecte: Record<string, number> = {}
+        if (nbEcarts > 0) alertesList.push({ type: 'error', message: `${nbEcarts} écart(s) non réglé(s) — ${manquantsTotal.toLocaleString()} F manquant, ${surplusTotal.toLocaleString()} F surplus`, action: 'manquants' })
+        const topIds = Object.entries(agentCollecte).sort((a, b) => b[1] - a[1]).slice(0, 5)
+        if (topIds.length > 0) {
+          const { data: topData } = await supabase.from('agents').select('id, nom, prenom, agences(nom)').in('id', topIds.map(t => t[0]))
+          setTopAgents(topIds.map(([id, montant]) => ({ ...topData?.find(a => a.id === id), montant })))
+        }
+
     // Évolution 6 derniers mois
     const evolution = []
     for (let i = 5; i >= 0; i--) {
@@ -319,8 +329,8 @@ useEffect(() => {
       d.setMonth(d.getMonth() - i)
       const debut = new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0]
       const fin = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
-      const { data: mData } = await supabase.from('fiches_journalieres').select('montant_mobilise').gte('date', debut).lte('date', fin)
-      const total = (mData || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+      const { data: mData } = await supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise').gte('date', debut).lte('date', fin)
+      const total = (mData || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
       evolution.push({
         mois: d.toLocaleDateString('fr-FR', { month: 'short' }),
         total,
@@ -335,8 +345,14 @@ useEffect(() => {
     const agencesWithStats = await Promise.all((data || []).map(async agence => {
       const { count: nbAgents } = await supabase.from('agents').select('*', { count: 'exact', head: true }).eq('agence_id', agence.id)
       const { count: nbZones } = await supabase.from('zones').select('*', { count: 'exact', head: true }).eq('agence_id', agence.id)
-      const { data: fiches } = await supabase.from('fiches_journalieres').select('montant_mobilise').eq('date', new Date().toISOString().split('T')[0])
-      const collecte = (fiches || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+      const { data: agentsAgence } = await supabase.from('agents').select('id').eq('agence_id', agence.id)
+      const agentIds = (agentsAgence || []).map(ag => ag.id)
+      let collecte = 0
+      if (agentIds.length > 0) {
+        const { data: fiches } = await supabase.from('fiches_journalieres')
+          .select('montant_smart, montant_mobilise').eq('date', today).in('agent_id', agentIds)
+        collecte = (fiches || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
+      }      
       return { ...agence, nbAgents: nbAgents || 0, nbZones: nbZones || 0, collecteJour: collecte }
     }))
     setAgences(agencesWithStats)
@@ -940,11 +956,8 @@ useEffect(() => {
       .from('fiches_journalieres')
       .select('*, agents!inner(nom, prenom, agence_id, telephone, agences(nom))')
       .order('date', { ascending: false })
-    
-    const avecManquant = (data || []).filter(f =>
-      Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0
-    )
-    setManquants(avecManquant)
+
+    setManquants((data || []).filter(f => getEcart(f) !== 0))
   }
   
   async function confirmerReglement(ficheId: string, commentaire?: string) {
@@ -959,12 +972,16 @@ useEffect(() => {
     // Notification à l'agent
     const fiche = manquants.find(f => f.id === ficheId)
     if (fiche) {
-      const montant = Math.max(0, (fiche.montant_mobilise || 0) - (fiche.montant_rapporte || 0))
+      const ecart = getEcart(fiche)
+      const isManquant = ecart > 0
+      const montant = Math.abs(ecart)
       await supabase.from('notifications').insert({
         agent_id: fiche.agent_id,
         type: 'validation',
-        titre: '✅ Manquant réglé',
-        message: `Votre manquant de ${montant.toLocaleString()} FCFA (fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')}) a été confirmé comme réglé.${commentaire ? ` Note: ${commentaire}` : ''}`,
+        titre: isManquant ? '✅ Manquant réglé' : '✅ Surplus régularisé',
+        message: isManquant
+          ? `Votre manquant de ${montant.toLocaleString()} FCFA (fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')}) a été confirmé comme réglé.${commentaire ? ` Note: ${commentaire}` : ''}`
+          : `Votre surplus de ${montant.toLocaleString()} FCFA (fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')}) a été régularisé.${commentaire ? ` Note: ${commentaire}` : ''}`,
       })
     }
   
@@ -1081,18 +1098,19 @@ useEffect(() => {
     const liste: any[] = []
   
     // Manquants non réglés
-    const manquantsReels = (manquants || []).filter(f =>
-      Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0
-    )
-    manquantsReels.forEach(f => {
-      const montant = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+    const ecartsReels = (manquants || []).filter(f => getEcart(f) !== 0)
+    ecartsReels.forEach(f => {
+      const ec = getEcart(f)
+      const isM = ec > 0
       liste.push({
-        type: 'error',
-        categorie: 'Manquant',
-        message: `Manquant de ${montant.toLocaleString()} FCFA non réglé`,
+        type: isM ? 'error' : 'warning',
+        categorie: isM ? 'Manquant' : 'Surplus',
+        message: isM
+          ? `Manquant de ${Math.abs(ec).toLocaleString()} FCFA non réglé`
+          : `Surplus de ${Math.abs(ec).toLocaleString()} FCFA non régularisé`,
         detail: `${f.agents?.prenom} ${f.agents?.nom} — ${f.agents?.agences?.nom || '—'} — Fiche du ${new Date(f.date).toLocaleDateString('fr-FR')}`,
         date: f.date,
-        action: 'fiches',
+        action: 'manquants',
         id: f.id,
       })
     })
@@ -1179,7 +1197,7 @@ useEffect(() => {
     { key: 'alertes', label: 'Alertes', icon: '⚠️', active: true },
     { key: 'parametres', label: 'Paramètres', icon: '⚙️', active: true },
     { key: 'permissions', label: 'Permissions', icon: '🔐', active: true },
-    { key: 'manquants', label: 'Manquants', icon: '🚨', active: true },
+    { key: 'manquants', label: 'Écarts', icon: '⚖️', active: true },
   ]
 
   if (loading) return (
@@ -1252,7 +1270,7 @@ useEffect(() => {
               {tab === 'agents' && '👥 Gestion des Agents'}
               {tab === 'objectifs' && '🎯 Gestion des Objectifs'}
               {tab === 'fiches' && '📋 Gestion des Fiches'} 
-              {tab === 'manquants' && '🚨 Gestion des Manquants'}
+              {tab === 'manquants' && '⚖️ Gestion des Écarts'}
               {tab === 'alertes' && '⚠️ Alertes & Anomalies'}
               {tab === 'parametres' && '⚙️ Paramètres'}
               {tab === 'equipes' && '🤝 Gestion des Équipes'}
@@ -1315,7 +1333,7 @@ useEffect(() => {
                   { label: 'Total agents', value: stats.totalAgents, icon: '👥', color: '#2A4E94', bg: '#EEF2FF', sub: 'Actifs sur la plateforme' },
                   { label: 'Total agences', value: stats.totalAgences, icon: '🏦', color: '#166534', bg: '#F0FDF4', sub: 'Réseau PADES' },
                   { label: "Collecté aujourd'hui", value: stats.collecteAujourdhui.toLocaleString() + ' Fcfa', icon: '💰', color: '#854D0E', bg: '#FEF9C3', sub: 'Toutes agences' },
-                  { label: 'Collecté ce mois', value: stats.collecteMois.toLocaleString() + ' Fcfa', icon: '📈', color: '#991B1B', bg: '#FEF2F2', sub: new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) },
+                  { label: 'Collecté ce mois (SMART)', value: stats.collecteMois.toLocaleString() + ' F', icon: '📈', color: '#991B1B', bg: '#FEF2F2', sub: `Commissions : ${stats.commissionsMois.toLocaleString()} F` },
                 ].map(s => (
                   <div key={s.label} className="bg-white rounded-2xl p-5 border border-gray-100">
                     <div className="flex items-start justify-between mb-3">
@@ -1332,11 +1350,12 @@ useEffect(() => {
               </div>
 
               {/* Stats secondaires */}
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-4 gap-4">
                 {[
                   { label: 'En attente activation', value: stats.agentsEnAttente, color: '#854D0E', bg: '#FEF9C3', icon: '⏳' },
-                  { label: 'Manquants non réglés', value: stats.manquantsTotal.toLocaleString() + ' FCFA', color: '#991B1B', bg: '#FEF2F2', icon: '🚨' },
-                  { label: 'Fiches non validées', value: stats.fichesNonValides, color: '#2A4E94', bg: '#EEF2FF', icon: '📋' },
+                  { label: 'Manquants non réglés', value: stats.manquantsTotal.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2', icon: '⚠️' },
+                  { label: 'Surplus non réglés', value: stats.surplusTotal.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF', icon: '🔵' },
+                  { label: 'Fiches non validées', value: stats.fichesNonValides, color: '#854D0E', bg: '#FEF9C3', icon: '📋' },
                 ].map(s => (
                   <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
@@ -1913,11 +1932,11 @@ useEffect(() => {
             ) : (
               <div className="grid grid-cols-3 gap-2">
                 {[
-                  { label: 'Comptes ouverts', value: agentFiches.reduce((s, f) => s + (f.comptes_ouverts || 0), 0) },
-                  { label: 'Montant collecté', value: agentFiches.reduce((s, f) => s + (f.montant_mobilise || 0), 0).toLocaleString() + ' F' },
-                  { label: 'Prospects visités', value: agentFiches.reduce((s, f) => s + (f.prospects_visites || 0), 0) },
-                  { label: 'Comptes activés', value: agentFiches.reduce((s, f) => s + (f.comptes_actives || 0), 0) },
-                  { label: 'Manquants', value: agentFiches.filter(f => (f.montant_mobilise - f.montant_rapporte) > 0 && !f.manquant_regle).length + ' non réglé(s)' },
+                  { label: 'Comptes DAT', value: agentFiches.reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0) },
+                  { label: 'Collecté (SMART)', value: agentFiches.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0).toLocaleString() + ' F' },
+                  { label: 'Commissions', value: agentFiches.reduce((s, f) => s + (f.commission_jour || 0), 0).toLocaleString() + ' F' },
+                  { label: 'Adhésions', value: agentFiches.reduce((s, f) => s + (f.nb_adhesions || 0), 0) },
+                  { label: 'Écarts non réglés', value: agentFiches.filter(f => getEcart(f) !== 0 && !f.manquant_regle).length },
                   { label: 'Fiches validées', value: agentFiches.filter(f => f.valide_chef).length + '/' + agentFiches.length },
                 ].map(s => (
                   <div key={s.label} className="rounded-xl p-2.5" style={{ backgroundColor: '#f8fafc' }}>
@@ -1982,7 +2001,9 @@ useEffect(() => {
             ) : (
               <div className="space-y-2 overflow-y-auto" style={{ maxHeight: '280px' }}>
                 {agentFiches.map(f => {
-                  const manq = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                  const ecart = getEcart(f)
+                  const manq = Math.abs(ecart)
+                  const isManquant = ecart > 0
                   return (
                     <div key={f.id} className="rounded-xl p-3 border" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
                       <div className="flex items-start justify-between mb-2">
@@ -1991,7 +2012,7 @@ useEffect(() => {
                             {new Date(f.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}
                           </div>
                           <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
-                            {f.comptes_ouverts} comptes · {(f.montant_mobilise || 0).toLocaleString()} FCFA
+                            {f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0} DAT · SMART {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
                           </div>
                         </div>
                         <div className="flex gap-1">
@@ -2002,7 +2023,7 @@ useEffect(() => {
                               ✅ Valider
                             </button>
                           )}
-                          {manq > 0 && !f.manquant_regle && (
+                          {ecart !== 0 && !f.manquant_regle && (
                             <button type="button" onClick={() => confirmerManquant(f.id)}
                               className="px-2 py-1 rounded-lg text-xs font-medium"
                               style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
@@ -2019,13 +2040,13 @@ useEffect(() => {
                           }}>
                           {f.valide_chef ? 'Validée' : 'En attente'}
                         </span>
-                        {manq > 0 && (
+                        {ecart !== 0 && (
                           <span className="text-xs px-2 py-0.5 rounded-full"
                             style={{
-                              backgroundColor: f.manquant_regle ? '#DCFCE7' : '#FEE2E2',
-                              color: f.manquant_regle ? '#166534' : '#991B1B'
+                              backgroundColor: f.manquant_regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
+                              color: f.manquant_regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
                             }}>
-                            {f.manquant_regle ? '✅ Manquant réglé' : `⚠️ ${manq.toLocaleString()} FCFA manquant`}
+                            {f.manquant_regle ? '✅ Réglé' : `${isManquant ? '⚠️' : '🔵'} ${manq.toLocaleString()} F`}
                           </span>
                         )}
                       </div>
@@ -2259,7 +2280,7 @@ useEffect(() => {
         {[
           { label: 'Total fiches', value: fiches.length, bg: '#EEF2FF', color: '#2A4E94' },
           { label: 'Non validées', value: fiches.filter(f => !f.valide_chef).length, bg: '#FEF9C3', color: '#854D0E' },
-          { label: 'Avec manquant', value: fiches.filter(f => (f.montant_mobilise - f.montant_rapporte) > 0 && !f.manquant_regle).length, bg: '#FEF2F2', color: '#991B1B' },
+          { label: 'Avec écart', value: fiches.filter(f => getEcart(f) !== 0 && !f.manquant_regle).length, bg: '#FEF2F2', color: '#991B1B' },
           { label: 'Validées', value: fiches.filter(f => f.valide_chef).length, bg: '#F0FDF4', color: '#166534' },
         ].map(s => (
           <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 text-center">
@@ -2305,10 +2326,11 @@ useEffect(() => {
           <select value={ficheFilterManquant} onChange={e => setFicheFilterManquant(e.target.value)}
             className="px-3 py-2 rounded-xl border text-xs outline-none"
             style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-            <option value="tous">Tous les manquants</option>
-            <option value="avec">Avec manquant</option>
-            <option value="regle">Manquant réglé</option>
-            <option value="sans">Sans manquant</option>
+            <option value="tous">Tous les écarts</option>
+            <option value="manquant">⚠️ Manquant</option>
+            <option value="surplus">🔵 Surplus</option>
+            <option value="regle">✅ Écart réglé</option>
+            <option value="sans">Sans écart</option>
           </select>
           {(ficheSearch || ficheFilterDate || ficheFilterAgence !== 'tous' || ficheFilterStatut !== 'tous' || ficheFilterManquant !== 'tous') && (
             <button type="button"
@@ -2339,15 +2361,17 @@ useEffect(() => {
                   const ma = ficheFilterAgence === 'tous' || f.agents?.agence_id === ficheFilterAgence
                   const mst = ficheFilterStatut === 'tous' || f.statut_validation === ficheFilterStatut
                   const md = ficheFilterDate === '' || f.date === ficheFilterDate
-                  const manq = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                  const ec = getEcart(f)
                   const mm = ficheFilterManquant === 'tous' ||
-                    (ficheFilterManquant === 'avec' && manq > 0 && !f.manquant_regle) ||
+                    (ficheFilterManquant === 'manquant' && ec > 0 && !f.manquant_regle) ||
+                    (ficheFilterManquant === 'surplus' && ec < 0 && !f.manquant_regle) ||
                     (ficheFilterManquant === 'regle' && f.manquant_regle) ||
-                    (ficheFilterManquant === 'sans' && manq === 0)
+                    (ficheFilterManquant === 'sans' && ec === 0)
                   return ms && ma && mst && md && mm
                 })
                 .map((f, i, arr) => {
-                  const manq = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                  const ecart = getEcart(f)
+                  const isManquant = ecart > 0
                   return (
                     <tr key={f.id}
                       onClick={() => setSelectedFiche(f)}
@@ -2380,22 +2404,22 @@ useEffect(() => {
                       </td>
                       <td className="px-3 py-3">
                         <span className="text-xs font-semibold" style={{ color: '#166534' }}>
-                          {(f.montant_mobilise || 0).toLocaleString()} F
+                          {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
                         </span>
                       </td>
                       <td className="px-3 py-3">
                         <span className="text-xs font-semibold" style={{ color: '#2A4E94' }}>
-                          {(f.montant_rapporte || 0).toLocaleString()} F
+                          {(f.montant_caisse ?? f.montant_rapporte ?? 0).toLocaleString()} F
                         </span>
                       </td>
                       <td className="px-3 py-3">
-                        {manq > 0 ? (
+                        {ecart !== 0 ? (
                           <span className="text-xs px-2 py-0.5 rounded-full font-medium"
                             style={{
-                              backgroundColor: f.manquant_regle ? '#DCFCE7' : '#FEE2E2',
-                              color: f.manquant_regle ? '#166534' : '#991B1B'
+                              backgroundColor: f.manquant_regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
+                              color: f.manquant_regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
                             }}>
-                            {f.manquant_regle ? '✅' : '⚠️'} {manq.toLocaleString()} F
+                            {f.manquant_regle ? '✅' : isManquant ? '⚠️' : '🔵'} {Math.abs(ecart).toLocaleString()} F
                           </span>
                         ) : (
                           <span className="text-xs" style={{ color: '#818387' }}>—</span>
@@ -2432,7 +2456,7 @@ useEffect(() => {
                           className="p-1.5 rounded-lg" title="Valider"
                           style={{ backgroundColor: '#F0FDF4', color: '#166634' }}>✅</button>
                       )}
-                          {manq > 0 && !f.manquant_regle && (
+                          {ecart !== 0 && !f.manquant_regle && (
                             <button type="button" onClick={() => confirmerManquantAdmin(f.id)}
                               className="p-1.5 rounded-lg" title="Confirmer manquant réglé"
                               style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>💰</button>
@@ -3209,21 +3233,17 @@ useEffect(() => {
 
       {/* Stats globales */}
       {(() => {
-        const total = manquants.reduce((s, f) =>
-          s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
         const nonRegle = manquants.filter(f => !f.manquant_regle)
-        const regle = manquants.filter(f => f.manquant_regle)
-        const totalNonRegle = nonRegle.reduce((s, f) =>
-          s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
-        const totalRegle = regle.reduce((s, f) =>
-          s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
+        const totalManq = nonRegle.filter(f => getEcart(f) > 0).reduce((s, f) => s + getEcart(f), 0)
+        const totalSurp = Math.abs(nonRegle.filter(f => getEcart(f) < 0).reduce((s, f) => s + getEcart(f), 0))
+        const nbRegle = manquants.filter(f => f.manquant_regle).length
 
         return (
           <div className="grid grid-cols-4 gap-3">
             {[
-              { label: 'Total manquants', value: total.toLocaleString() + ' F', bg: '#EEF2FF', color: '#2A4E94', icon: '💰' },
-              { label: 'Non réglés', value: totalNonRegle.toLocaleString() + ' F', bg: '#FEF2F2', color: '#991B1B', icon: '🚨' },
-              { label: 'Réglés', value: totalRegle.toLocaleString() + ' F', bg: '#F0FDF4', color: '#166534', icon: '✅' },
+              { label: 'Manquants non réglés', value: totalManq.toLocaleString() + ' F', bg: '#FEF2F2', color: '#991B1B', icon: '⚠️' },
+              { label: 'Surplus non réglés', value: totalSurp.toLocaleString() + ' F', bg: '#EEF2FF', color: '#2A4E94', icon: '🔵' },
+              { label: 'Écarts réglés', value: nbRegle, bg: '#F0FDF4', color: '#166534', icon: '✅' },
               { label: 'Fiches concernées', value: manquants.length, bg: '#FEF9C3', color: '#854D0E', icon: '📋' },
             ].map(s => (
               <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100">
@@ -3261,8 +3281,10 @@ useEffect(() => {
           <select value={manquantFilterStatut} onChange={e => setManquantFilterStatut(e.target.value)}
             className="px-3 py-2 rounded-xl border text-xs outline-none"
             style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-            <option value="tous">Tous les statuts</option>
-            <option value="non_regle">⚠️ Non réglés</option>
+            <option value="tous">Tous les écarts</option>
+            <option value="non_regle">⏳ Non réglés</option>
+            <option value="manquant">⚠️ Manquants</option>
+            <option value="surplus">🔵 Surplus</option>
             <option value="regle">✅ Réglés</option>
           </select>
           <input type="date" value={manquantFilterDateDebut}
@@ -3296,7 +3318,7 @@ useEffect(() => {
           <table className="w-full">
             <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
               <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                {['Date', 'Agent', 'Agence', 'Collecté', 'Rapporté', 'Manquant', 'Statut', 'Actions'].map(h => (
+              {['Date', 'Agent', 'Agence', 'SMART', 'Caisse', 'Écart', 'Type', 'Actions'].map(h => (
                   <th key={h} className="text-left px-3 py-3 text-xs font-semibold"
                     style={{ color: '#818387' }}>{h}</th>
                 ))}
@@ -3305,18 +3327,23 @@ useEffect(() => {
             <tbody>
               {manquants
                 .filter(f => {
-                  const montant = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                  const ec = getEcart(f)
                   const ms = manquantSearch === '' ||
                     `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(manquantSearch.toLowerCase())
                   const ma = manquantFilterAgence === 'tous' || f.agents?.agence_id === manquantFilterAgence
-                  const mst = manquantFilterStatut === 'tous' ||
-                    (manquantFilterStatut === 'regle' ? f.manquant_regle : !f.manquant_regle)
+                  const mst = manquantFilterStatut === 'tous'
+                    || (manquantFilterStatut === 'regle' && f.manquant_regle)
+                    || (manquantFilterStatut === 'non_regle' && !f.manquant_regle)
+                    || (manquantFilterStatut === 'manquant' && ec > 0 && !f.manquant_regle)
+                    || (manquantFilterStatut === 'surplus' && ec < 0 && !f.manquant_regle)
                   const md1 = !manquantFilterDateDebut || f.date >= manquantFilterDateDebut
                   const md2 = !manquantFilterDateFin || f.date <= manquantFilterDateFin
-                  return ms && ma && mst && md1 && md2 && montant > 0
+                  return ms && ma && mst && md1 && md2 && ec !== 0
                 })
                 .map((f, i, arr) => {
-                  const montant = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                  const ecart = getEcart(f)
+                  const isManquant = ecart > 0
+                  const montant = Math.abs(ecart)
                   return (
                     <tr key={f.id}
                       onClick={() => setSelectedManquant(f)}
@@ -3354,26 +3381,27 @@ useEffect(() => {
                       </td>
                       <td className="px-3 py-3">
                         <span className="text-xs font-semibold" style={{ color: '#166534' }}>
-                          {(f.montant_mobilise || 0).toLocaleString()} F
+                          {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
                         </span>
                       </td>
                       <td className="px-3 py-3">
                         <span className="text-xs font-semibold" style={{ color: '#2A4E94' }}>
-                          {(f.montant_rapporte || 0).toLocaleString()} F
+                          {(f.montant_caisse ?? f.montant_rapporte ?? 0).toLocaleString()} F
                         </span>
                       </td>
                       <td className="px-3 py-3">
-                        <span className="text-sm font-bold" style={{ color: '#E4322C' }}>
-                          {montant.toLocaleString()} F
+                        <span className="text-sm font-bold"
+                          style={{ color: f.manquant_regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
+                          {isManquant ? '−' : '+'} {montant.toLocaleString()} F
                         </span>
                       </td>
                       <td className="px-3 py-3">
                         <span className="text-xs px-2 py-0.5 rounded-full font-medium"
                           style={{
-                            backgroundColor: f.manquant_regle ? '#DCFCE7' : '#FEE2E2',
-                            color: f.manquant_regle ? '#166534' : '#991B1B'
+                            backgroundColor: f.manquant_regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
+                            color: f.manquant_regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
                           }}>
-                          {f.manquant_regle ? '✅ Réglé' : '⚠️ En attente'}
+                          {f.manquant_regle ? '✅ Réglé' : isManquant ? '⚠️ Manquant' : '🔵 Surplus'}
                         </span>
                       </td>
                       <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
@@ -3396,12 +3424,12 @@ useEffect(() => {
                 })}
             </tbody>
           </table>
-          {manquants.filter(f => Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0).length === 0 && (
+          {manquants.length === 0 && (
             <div className="p-12 text-center">
               <div className="text-4xl mb-3">✅</div>
-              <div className="font-medium text-sm" style={{ color: '#166534' }}>Aucun manquant</div>
+              <div className="font-medium text-sm" style={{ color: '#166534' }}>Aucun écart</div>
               <div className="text-xs mt-1" style={{ color: '#818387' }}>
-                Tous les manquants ont été réglés !
+                Toutes les caisses sont équilibrées !
               </div>
             </div>
           )}
@@ -3409,19 +3437,20 @@ useEffect(() => {
       </div>
     </div>
 
-    {/* Panneau détail manquant */}
-    {selectedManquant && (() => {
-      const montant = Math.max(0, (selectedManquant.montant_mobilise || 0) - (selectedManquant.montant_rapporte || 0))
+{/* Panneau détail écart */}
+{selectedManquant && (() => {
+      const ecart = getEcart(selectedManquant)
+      const isManquant = ecart > 0
+      const montant = Math.abs(ecart)
+      const regle = selectedManquant.manquant_regle
       return (
         <div className="w-1/2 space-y-4">
           <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
 
-            {/* Header */}
-            <div className="p-5 border-b flex items-start justify-between"
-              style={{ borderColor: '#f1f5f9' }}>
+            <div className="p-5 border-b flex items-start justify-between" style={{ borderColor: '#f1f5f9' }}>
               <div>
                 <div className="font-bold text-base" style={{ color: '#1a1a2e' }}>
-                  Manquant — {new Date(selectedManquant.date).toLocaleDateString('fr-FR', {
+                  {isManquant ? '⚠️ Manquant' : '🔵 Surplus'} — {new Date(selectedManquant.date).toLocaleDateString('fr-FR', {
                     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
                   })}
                 </div>
@@ -3431,26 +3460,25 @@ useEffect(() => {
                 </div>
               </div>
               <button type="button" onClick={() => setSelectedManquant(null)}
-                className="p-1.5 rounded-lg"
-                style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+                className="p-1.5 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
             </div>
 
-            {/* Montant */}
             <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
               <div className="rounded-2xl p-5 text-center"
                 style={{
-                  backgroundColor: selectedManquant.manquant_regle ? '#F0FDF4' : '#FEF2F2',
-                  border: `1px solid ${selectedManquant.manquant_regle ? '#BBF7D0' : '#FECACA'}`
+                  backgroundColor: regle ? '#F0FDF4' : isManquant ? '#FEF2F2' : '#EEF2FF',
+                  border: `1px solid ${regle ? '#BBF7D0' : isManquant ? '#FECACA' : '#C7D2FE'}`
                 }}>
                 <div className="text-3xl font-bold mb-1"
-                  style={{ color: selectedManquant.manquant_regle ? '#166534' : '#E4322C' }}>
-                  {montant.toLocaleString()} FCFA
+                  style={{ color: regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
+                  {isManquant ? '−' : '+'} {montant.toLocaleString()} FCFA
                 </div>
-                <div className="text-sm"
-                  style={{ color: selectedManquant.manquant_regle ? '#166534' : '#991B1B' }}>
-                  {selectedManquant.manquant_regle ? '✅ Manquant réglé' : '⚠️ Non réglé'}
+                <div className="text-sm" style={{ color: regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94' }}>
+                  {regle
+                    ? (isManquant ? '✅ Manquant réglé' : '✅ Surplus régularisé')
+                    : (isManquant ? '⚠️ Non réglé' : '🔵 Non régularisé')}
                 </div>
-                {selectedManquant.manquant_regle && selectedManquant.manquant_regle_at && (
+                {regle && selectedManquant.manquant_regle_at && (
                   <div className="text-xs mt-1" style={{ color: '#818387' }}>
                     Réglé le {new Date(selectedManquant.manquant_regle_at).toLocaleDateString('fr-FR')}
                   </div>
@@ -3458,15 +3486,16 @@ useEffect(() => {
               </div>
             </div>
 
-            {/* Détail fiche */}
             <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
               <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>DÉTAIL DE LA FICHE</h4>
               <div className="grid grid-cols-2 gap-2">
                 {[
-                  { label: 'Montant collecté', value: (selectedManquant.montant_mobilise || 0).toLocaleString() + ' F' },
-                  { label: 'Montant rapporté', value: (selectedManquant.montant_rapporte || 0).toLocaleString() + ' F' },
-                  { label: 'Comptes ouverts', value: selectedManquant.comptes_ouverts || 0 },
+                  { label: 'SMART (théorique)', value: (selectedManquant.montant_smart ?? selectedManquant.montant_mobilise ?? 0).toLocaleString() + ' F' },
+                  { label: 'Caisse (rapporté)', value: (selectedManquant.montant_caisse ?? selectedManquant.montant_rapporte ?? 0).toLocaleString() + ' F' },
+                  { label: 'Commission', value: (selectedManquant.commission_jour || 0).toLocaleString() + ' F' },
+                  { label: 'Comptes DAT', value: selectedManquant.comptes_ouverts_dat ?? selectedManquant.comptes_ouverts ?? 0 },
                   { label: 'Téléphone agent', value: selectedManquant.agents?.telephone || '—' },
+                  { label: 'Adhésions', value: selectedManquant.nb_adhesions || 0 },
                 ].map(k => (
                   <div key={k.label} className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
                     <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
@@ -3476,7 +3505,6 @@ useEffect(() => {
               </div>
             </div>
 
-            {/* Commentaire chef si présent */}
             {selectedManquant.commentaire_chef && (
               <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
                 <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>NOTE</h4>
@@ -3484,18 +3512,17 @@ useEffect(() => {
               </div>
             )}
 
-            {/* Action */}
             <div className="p-5">
-              {!selectedManquant.manquant_regle ? (
+              {!regle ? (
                 <button type="button"
                   onClick={() => { setReglementFiche(selectedManquant); setShowReglementModal(true) }}
                   className="w-full py-3 rounded-xl text-white text-sm font-semibold"
                   style={{ backgroundColor: '#2A4E94' }}>
-                  💰 Confirmer le règlement
+                  {isManquant ? '💰 Confirmer le règlement' : '✅ Confirmer la régularisation'}
                 </button>
               ) : (
                 <div className="text-center text-sm font-medium" style={{ color: '#166534' }}>
-                  ✅ Ce manquant a été réglé
+                  ✅ Cet écart a été réglé
                 </div>
               )}
             </div>
@@ -4147,8 +4174,15 @@ useEffect(() => {
             })}
           </div>
           <div className="text-xs mt-1" style={{ color: '#2A4E94' }}>
-            {(validationFiche.montant_mobilise || 0).toLocaleString()} FCFA collectés
+            SMART {(validationFiche.montant_smart ?? validationFiche.montant_mobilise ?? 0).toLocaleString()} F ·
+            Caisse {(validationFiche.montant_caisse ?? validationFiche.montant_rapporte ?? 0).toLocaleString()} F
           </div>
+          {getEcart(validationFiche) !== 0 && (
+            <div className="text-xs mt-1 font-semibold"
+              style={{ color: getEcart(validationFiche) > 0 ? '#991B1B' : '#2A4E94' }}>
+              {getEcart(validationFiche) > 0 ? '⚠️ Manquant' : '🔵 Surplus'} : {Math.abs(getEcart(validationFiche)).toLocaleString()} F
+            </div>
+          )}
         </div>
 
         {/* Choix statut */}
@@ -4648,7 +4682,7 @@ useEffect(() => {
       <div className="px-6 py-4 border-b flex items-center justify-between"
         style={{ borderColor: '#f1f5f9' }}>
         <h3 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>
-          💰 Confirmer le règlement
+          {getEcart(reglementFiche) > 0 ? '💰 Confirmer le règlement' : '✅ Confirmer la régularisation'}
         </h3>
         <button type="button" onClick={() => { setShowReglementModal(false); setReglementCommentaire('') }}
           className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
@@ -4656,18 +4690,32 @@ useEffect(() => {
 
       <div className="p-6 space-y-4">
         {/* Info */}
-        <div className="rounded-xl p-4" style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA' }}>
-          <div className="font-semibold text-sm" style={{ color: '#991B1B' }}>
-            {reglementFiche.agents?.prenom} {reglementFiche.agents?.nom}
-          </div>
-          <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
-            Fiche du {new Date(reglementFiche.date).toLocaleDateString('fr-FR')}
-            · {reglementFiche.agents?.agences?.nom}
-          </div>
-          <div className="font-bold text-2xl mt-2" style={{ color: '#E4322C' }}>
-            {Math.max(0, (reglementFiche.montant_mobilise || 0) - (reglementFiche.montant_rapporte || 0)).toLocaleString()} FCFA
-          </div>
-        </div>
+        {(() => {
+          const ec = getEcart(reglementFiche)
+          const isM = ec > 0
+          return (
+            <div className="rounded-xl p-4"
+              style={{
+                backgroundColor: isM ? '#FEF2F2' : '#EEF2FF',
+                border: `1px solid ${isM ? '#FECACA' : '#C7D2FE'}`
+              }}>
+              <div className="font-semibold text-sm" style={{ color: isM ? '#991B1B' : '#2A4E94' }}>
+                {reglementFiche.agents?.prenom} {reglementFiche.agents?.nom}
+              </div>
+              <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
+                Fiche du {new Date(reglementFiche.date).toLocaleDateString('fr-FR')}
+                · {reglementFiche.agents?.agences?.nom}
+              </div>
+              <div className="text-xs mt-1" style={{ color: '#818387' }}>
+                SMART {(reglementFiche.montant_smart ?? reglementFiche.montant_mobilise ?? 0).toLocaleString()} F ·
+                Caisse {(reglementFiche.montant_caisse ?? reglementFiche.montant_rapporte ?? 0).toLocaleString()} F
+              </div>
+              <div className="font-bold text-2xl mt-2" style={{ color: isM ? '#E4322C' : '#2A4E94' }}>
+                {isM ? '⚠️ Manquant' : '🔵 Surplus'} : {Math.abs(ec).toLocaleString()} FCFA
+              </div>
+            </div>
+          )
+        })()}
 
         {/* Commentaire */}
         <div>
