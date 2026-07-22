@@ -31,7 +31,8 @@ export default function DashboardChef() {
   const [memberFiches, setMemberFiches] = useState<any[]>([])
   const [memberLoadingFiches, setMemberLoadingFiches] = useState(false)
   const [equipeStats, setEquipeStats] = useState({
-    totalComptes: 0, totalCollecte: 0, totalManquants: 0, fichesNonValidees: 0
+    totalComptes: 0, totalCollecte: 0, totalCommissions: 0,
+    totalManquants: 0, totalSurplus: 0, nbEcarts: 0, fichesNonValidees: 0
   })
 
   // Validation fiches membres
@@ -187,10 +188,10 @@ export default function DashboardChef() {
       .select('id, nom, prenom').eq('agence_id', a.agence_id).eq('statut', 'actif').eq('role', 'agent')
     if (!agentsAgence?.length) return
     const { data: fichesMois } = await supabase.from('fiches_journalieres')
-      .select('agent_id, montant_mobilise').gte('date', moisDebut)
+      .select('agent_id, montant_smart, montant_mobilise').gte('date', moisDebut)
       .in('agent_id', agentsAgence.map(ag => ag.id))
     const scores: Record<string, number> = {}
-    ;(fichesMois || []).forEach(f => { scores[f.agent_id] = (scores[f.agent_id] || 0) + (f.montant_mobilise || 0) })
+    ;(fichesMois || []).forEach(f => { scores[f.agent_id] = (scores[f.agent_id] || 0) + (f.montant_smart ?? f.montant_mobilise ?? 0) })
     setClassement(agentsAgence.map(ag => ({ ...ag, score: scores[ag.id] || 0 })).sort((a, b) => b.score - a.score))
   }
 
@@ -206,21 +207,36 @@ export default function DashboardChef() {
       .select('*, agences(nom)').eq('equipe_id', a.equipe_id).neq('id', a.id)
     setEquipeMembers(members || [])
 
-    // Stats équipe ce mois
-    const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-    const allMemberIds = [...(members || []).map(m => m.id), a.id]
-    if (allMemberIds.length > 0) {
-      const { data: fichesMois } = await supabase.from('fiches_journalieres')
-        .select('*').gte('date', moisDebut).in('agent_id', allMemberIds)
-      const totalComptes = (fichesMois || []).reduce((s, f) => s + (f.comptes_ouverts || 0), 0)
-      const totalCollecte = (fichesMois || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
-      const { data: manqs } = await supabase.from('fiches_journalieres')
-        .select('montant_mobilise, montant_rapporte').eq('manquant_regle', false).in('agent_id', allMemberIds)
-      const totalManquants = (manqs || []).reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
-      const { count: fichesNonValidees } = await supabase.from('fiches_journalieres')
-        .select('*', { count: 'exact', head: true }).eq('valide_chef', false).in('agent_id', allMemberIds)
-      setEquipeStats({ totalComptes, totalCollecte, totalManquants, fichesNonValidees: fichesNonValidees || 0 })
-    }
+// Stats équipe ce mois
+const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
+const allMemberIds = [...(members || []).map(m => m.id), a.id]
+if (allMemberIds.length > 0) {
+  const { data: fichesMois } = await supabase.from('fiches_journalieres')
+    .select('*').gte('date', moisDebut).in('agent_id', allMemberIds)
+  const totalComptes = (fichesMois || []).reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0)
+  const totalCollecte = (fichesMois || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
+  const totalCommissions = (fichesMois || []).reduce((s, f) => s + (f.commission_jour || 0), 0)
+
+  // Écarts non réglés (manquants + surplus)
+  const { data: ecarts } = await supabase.from('fiches_journalieres')
+    .select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte')
+    .eq('manquant_regle', false).in('agent_id', allMemberIds)
+  let totalManquants = 0, totalSurplus = 0, nbEcarts = 0
+  ;(ecarts || []).forEach(f => {
+    const e = (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+    if (e > 0) { totalManquants += e; nbEcarts++ }
+    else if (e < 0) { totalSurplus += Math.abs(e); nbEcarts++ }
+  })
+
+  const { count: fichesNonValidees } = await supabase.from('fiches_journalieres')
+    .select('*', { count: 'exact', head: true }).eq('valide_chef', false).in('agent_id', allMemberIds)
+
+  setEquipeStats({
+    totalComptes, totalCollecte, totalCommissions,
+    totalManquants, totalSurplus, nbEcarts,
+    fichesNonValidees: fichesNonValidees || 0
+  })
+}
   }
 
   async function selectMember(member: any) {
@@ -316,17 +332,25 @@ export default function DashboardChef() {
     router.push('/login')
   }
 
-  // ── Calculs agent ──
-  const fichesMois = fiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
-  const totalComptes = fichesMois.reduce((s, f) => s + (f.comptes_ouverts || 0), 0)
-  const totalActives = fichesMois.reduce((s, f) => s + (f.comptes_actives || 0), 0)
-  const totalCollecte = fichesMois.reduce((s, f) => s + (f.montant_mobilise || 0), 0)
-  const totalRapporte = fichesMois.reduce((s, f) => s + (f.montant_rapporte || 0), 0)
-  const totalProspects = fichesMois.reduce((s, f) => s + (f.prospects_visites || 0), 0)
-  const joursActifs = fichesMois.length
-  const tauxActivation = totalComptes > 0 ? Math.round((totalActives / totalComptes) * 100) : 0
-  const tauxCollecte = totalCollecte > 0 ? Math.round((totalRapporte / totalCollecte) * 100) : 0
-  const scoreMensuel = joursActifs > 0 ? Math.min(100, Math.round((totalComptes / (joursActifs * 6)) * 100)) : 0
+// ── Helper écart ──
+const getEcart = (f: any) => (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+
+// ── Calculs agent ──
+const fichesMois = fiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+const totalComptesDat = fichesMois.reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0)
+const totalSmart = fichesMois.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
+const totalCaisse = fichesMois.reduce((s, f) => s + (f.montant_caisse ?? f.montant_rapporte ?? 0), 0)
+const totalCommissions = fichesMois.reduce((s, f) => s + (f.commission_jour || 0), 0)
+const totalAdhesions = fichesMois.reduce((s, f) => s + (f.nb_adhesions || 0), 0)
+const totalLydeCash = fichesMois.reduce((s, f) => s + (f.nb_abonnements_lyde_cash || 0), 0)
+const totalReactivations = fichesMois.reduce((s, f) => s + (f.reactivations?.length || 0), 0)
+const totalAugmentations = fichesMois.reduce((s, f) => s + (f.augmentations_mise?.length || 0), 0)
+const joursActifs = fichesMois.length
+const joursSansEcart = fichesMois.filter(f => getEcart(f) === 0).length
+const tauxConformite = joursActifs > 0 ? Math.round((joursSansEcart / joursActifs) * 100) : 0
+const tauxRegularite = Math.min(100, Math.round((joursActifs / new Date().getDate()) * 100))
+const scoreMensuel = joursActifs > 0 ? Math.min(100, Math.round((totalComptesDat / (joursActifs * 6)) * 100)) : 0
+const totalCollecte = totalSmart
 
   const streak = (() => {
     let count = 0; const now = new Date()
@@ -338,9 +362,13 @@ export default function DashboardChef() {
     return count
   })()
 
-  const manquantsListe = fiches.filter(f => Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0)
-  const manquantsNonRegles = manquantsListe.filter(f => !f.manquant_regle)
-  const totalManquants = manquantsNonRegles.reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
+  const ecartsListe = fiches.filter(f => getEcart(f) !== 0)
+  const ecartsNonRegles = ecartsListe.filter(f => !f.manquant_regle)
+  const manquantsNonRegles = ecartsNonRegles.filter(f => getEcart(f) > 0)
+  const surplusNonRegles = ecartsNonRegles.filter(f => getEcart(f) < 0)
+  const totalManquants = manquantsNonRegles.reduce((s, f) => s + getEcart(f), 0)
+  const totalSurplus = Math.abs(surplusNonRegles.reduce((s, f) => s + getEcart(f), 0))
+
   const monRang = classement.findIndex(a => a.id === agent?.id) + 1
   const notifNonLues = notifications.filter(n => !n.lu).length
   const messagesNonLus = messages.filter(m => m.destinataire_id === agent?.id && !m.lu).length
@@ -357,7 +385,7 @@ export default function DashboardChef() {
     const d = new Date(); d.setDate(d.getDate() - (6 - i))
     const dateStr = d.toISOString().split('T')[0]
     const fiche = fiches.find(f => f.date === dateStr)
-    return { jour: d.toLocaleDateString('fr-FR', { weekday: 'short' }), montant: fiche?.montant_mobilise || 0, comptes: fiche?.comptes_ouverts || 0 }
+    return { jour: d.toLocaleDateString('fr-FR', { weekday: 'short' }), montant: (fiche?.montant_smart ?? fiche?.montant_mobilise ?? 0), comptes: (fiche?.comptes_ouverts_dat ?? fiche?.comptes_ouverts ?? 0) }
   })
 
   const messagesConv = selectedContact ? messages.filter(m =>
@@ -494,9 +522,9 @@ export default function DashboardChef() {
               </div>
 
               <div className="grid grid-cols-3 gap-3 mb-3">
-                {[
-                  { label: 'Mon activation', value: `${tauxActivation}%`, icon: '🎯' },
-                  { label: 'Ma collecte', value: `${tauxCollecte}%`, icon: '💰' },
+              {[
+                  { label: 'Conformité', value: `${tauxConformite}%`, icon: '🎯' },
+                  { label: 'Régularité', value: `${tauxRegularite}%`, icon: '📅' },
                   { label: 'Mon score', value: `${scoreMensuel}%`, icon: '⭐' },
                 ].map(s => (
                   <div key={s.label} className="text-center p-3 rounded-xl"
@@ -536,8 +564,8 @@ export default function DashboardChef() {
                 <div className="grid grid-cols-4 gap-2">
                   {[
                     { label: 'Membres', value: equipeMembers.length + 1, icon: '👤', color: '#2A4E94' },
-                    { label: 'Comptes', value: equipeStats.totalComptes, icon: '🏦', color: '#166534' },
-                    { label: 'Collecté', value: (equipeStats.totalCollecte / 1000).toFixed(0) + 'k F', icon: '💰', color: '#854D0E' },
+                    { label: 'Comptes DAT', value: equipeStats.totalComptes, icon: '🏦', color: '#166534' },
+                    { label: 'SMART', value: (equipeStats.totalCollecte / 1000).toFixed(0) + 'k F', icon: '💰', color: '#854D0E' },
                     { label: 'À valider', value: equipeStats.fichesNonValidees, icon: '📋', color: equipeStats.fichesNonValidees > 0 ? '#991B1B' : '#166534' },
                   ].map(s => (
                     <div key={s.label} className="text-center p-2 rounded-xl"
@@ -597,23 +625,36 @@ export default function DashboardChef() {
               </div>
             </div>
 
-            {/* Alerte manquants */}
-            {totalManquants > 0 && (
+{/* Alerte écarts */}
+{ecartsNonRegles.length > 0 && (
               <button type="button" onClick={() => setActiveTab('manquants')}
                 className="w-full rounded-2xl p-4 flex items-center justify-between text-left"
-                style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA' }}>
+                style={{
+                  backgroundColor: manquantsNonRegles.length > 0 ? '#FEF2F2' : '#EEF2FF',
+                  border: `1px solid ${manquantsNonRegles.length > 0 ? '#FECACA' : '#C7D2FE'}`
+                }}>
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
-                    style={{ backgroundColor: '#FEE2E2' }}>⚠️</div>
+                    style={{ backgroundColor: manquantsNonRegles.length > 0 ? '#FEE2E2' : '#E0E7FF' }}>
+                    {manquantsNonRegles.length > 0 ? '⚠️' : '🔵'}
+                  </div>
                   <div>
-                    <div className="font-semibold text-sm" style={{ color: '#991B1B' }}>
-                      {manquantsNonRegles.length} manquant(s) non réglé(s)
+                    <div className="font-semibold text-sm"
+                      style={{ color: manquantsNonRegles.length > 0 ? '#991B1B' : '#2A4E94' }}>
+                      {ecartsNonRegles.length} écart(s) non réglé(s)
                     </div>
-                    <div className="text-xs" style={{ color: '#B91C1C' }}>{totalManquants.toLocaleString()} FCFA</div>
+                    <div className="text-xs" style={{ color: manquantsNonRegles.length > 0 ? '#B91C1C' : '#2A4E94' }}>
+                      {totalManquants > 0 && `⚠️ ${totalManquants.toLocaleString()} F`}
+                      {totalManquants > 0 && totalSurplus > 0 && ' · '}
+                      {totalSurplus > 0 && `🔵 ${totalSurplus.toLocaleString()} F`}
+                    </div>
                   </div>
                 </div>
                 <span className="text-xs px-2 py-1 rounded-full font-medium"
-                  style={{ backgroundColor: '#FEE2E2', color: '#991B1B' }}>Voir →</span>
+                  style={{
+                    backgroundColor: manquantsNonRegles.length > 0 ? '#FEE2E2' : '#E0E7FF',
+                    color: manquantsNonRegles.length > 0 ? '#991B1B' : '#2A4E94'
+                  }}>Voir →</span>
               </button>
             )}
 
@@ -674,11 +715,13 @@ export default function DashboardChef() {
             <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
               <h2 className="text-sm font-bold mb-4" style={{ color: text }}>📊 Mon résumé du mois</h2>
               <div className="grid grid-cols-2 gap-3">
-                {[
+              {[
                   { label: 'Jours actifs', value: joursActifs, icon: '📅' },
-                  { label: 'Comptes ouverts', value: totalComptes, icon: '🏦' },
-                  { label: 'Prospects visités', value: totalProspects, icon: '👥' },
-                  { label: 'Montant collecté', value: totalCollecte.toLocaleString() + ' F', icon: '💵' },
+                  { label: 'Comptes DAT', value: totalComptesDat, icon: '🏦' },
+                  { label: 'Collecté (SMART)', value: totalSmart.toLocaleString() + ' F', icon: '💵' },
+                  { label: 'Commissions', value: totalCommissions.toLocaleString() + ' F', icon: '💰' },
+                  { label: 'Adhésions', value: totalAdhesions, icon: '👥' },
+                  { label: 'Réactivations', value: totalReactivations, icon: '🔄' },
                 ].map(item => (
                   <div key={item.label} className="text-center p-3 rounded-xl"
                     style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
@@ -726,7 +769,6 @@ export default function DashboardChef() {
             ) : (
               <div className="space-y-3">
                 {fichesFiltrees.map(fiche => {
-                  const manq = Math.max(0, (fiche.montant_mobilise || 0) - (fiche.montant_rapporte || 0))
                   const statutColor = fiche.statut_validation === 'validee' ? { bg: '#DCFCE7', color: '#166534', label: '✅ Validée' } :
                     fiche.statut_validation === 'rejetee' ? { bg: '#FEE2E2', color: '#991B1B', label: '❌ Rejetée' } :
                     fiche.statut_validation === 'a_corriger' ? { bg: '#FEF9C3', color: '#854D0E', label: '🔄 À corriger' } :
@@ -740,22 +782,25 @@ export default function DashboardChef() {
                         <div className="flex gap-1 flex-wrap">
                           <span className="text-xs px-2 py-0.5 rounded-full font-medium"
                             style={{ backgroundColor: statutColor.bg, color: statutColor.color }}>{statutColor.label}</span>
-                          {manq > 0 && (
+                          {getEcart(fiche) !== 0 && (
                             <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                              style={{ backgroundColor: fiche.manquant_regle ? '#DCFCE7' : '#FEE2E2', color: fiche.manquant_regle ? '#166534' : '#991B1B' }}>
-                              {fiche.manquant_regle ? '✅' : '⚠️'} {manq.toLocaleString()} F
+                              style={{
+                                backgroundColor: fiche.manquant_regle ? '#DCFCE7' : getEcart(fiche) > 0 ? '#FEE2E2' : '#E0E7FF',
+                                color: fiche.manquant_regle ? '#166534' : getEcart(fiche) > 0 ? '#991B1B' : '#2A4E94'
+                              }}>
+                              {fiche.manquant_regle ? '✅' : getEcart(fiche) > 0 ? '⚠️' : '🔵'} {Math.abs(getEcart(fiche)).toLocaleString()} F
                             </span>
                           )}
                         </div>
                       </div>
                       <div className="grid grid-cols-3 gap-2 mb-3">
                         {[
-                          { label: 'Comptes', value: fiche.comptes_ouverts },
-                          { label: 'Activés', value: fiche.comptes_actives },
-                          { label: 'Collecté', value: `${(fiche.montant_mobilise || 0).toLocaleString()}F` },
-                          { label: 'Prospects', value: fiche.prospects_visites },
-                          { label: 'Dépôts', value: fiche.nb_depots },
-                          { label: 'Clients', value: fiche.clients_suivis },
+                          { label: 'SMART', value: `${(fiche.montant_smart ?? fiche.montant_mobilise ?? 0).toLocaleString()}F` },
+                          { label: 'Caisse', value: `${(fiche.montant_caisse ?? fiche.montant_rapporte ?? 0).toLocaleString()}F` },
+                          { label: 'Commission', value: `${(fiche.commission_jour || 0).toLocaleString()}F` },
+                          { label: 'Comptes DAT', value: fiche.comptes_ouverts_dat ?? fiche.comptes_ouverts ?? 0 },
+                          { label: 'Adhésions', value: fiche.nb_adhesions || 0 },
+                          { label: 'Réactiv.', value: fiche.reactivations?.length || 0 },
                         ].map(k => (
                           <div key={k.label} className="text-center p-2 rounded-xl" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
                             <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{k.value}</div>
@@ -785,12 +830,14 @@ export default function DashboardChef() {
               👥 Mon équipe — {equipeInfo?.nom || '—'}
             </h2>
 
-            {/* Stats équipe */}
-            <div className="grid grid-cols-2 gap-3">
+{/* Stats équipe */}
+<div className="grid grid-cols-2 gap-3">
               {[
-                { label: 'Total collecté', value: equipeStats.totalCollecte.toLocaleString() + ' F', color: '#166534', bg: '#F0FDF4', icon: '💰' },
-                { label: 'Comptes ouverts', value: equipeStats.totalComptes, color: '#2A4E94', bg: '#EEF2FF', icon: '🏦' },
+                { label: 'Collecté (SMART)', value: equipeStats.totalCollecte.toLocaleString() + ' F', color: '#166534', bg: '#F0FDF4', icon: '💰' },
+                { label: 'Comptes DAT', value: equipeStats.totalComptes, color: '#2A4E94', bg: '#EEF2FF', icon: '🏦' },
+                { label: 'Commissions', value: equipeStats.totalCommissions.toLocaleString() + ' F', color: '#854D0E', bg: '#FEF9C3', icon: '💵' },
                 { label: 'Manquants', value: equipeStats.totalManquants.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2', icon: '⚠️' },
+                { label: 'Surplus', value: equipeStats.totalSurplus.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF', icon: '🔵' },
                 { label: 'Fiches à valider', value: equipeStats.fichesNonValidees, color: '#854D0E', bg: '#FEF9C3', icon: '📋' },
               ].map(s => (
                 <div key={s.label} className="rounded-2xl p-4 flex items-center gap-3" style={{ backgroundColor: s.bg }}>
@@ -852,10 +899,10 @@ export default function DashboardChef() {
                               <div className="space-y-2">
                                 {/* Stats rapides membre */}
                                 <div className="grid grid-cols-3 gap-2 mb-3">
-                                  {[
-                                    { label: 'Comptes (mois)', value: memberFiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1)).reduce((s, f) => s + (f.comptes_ouverts || 0), 0) },
-                                    { label: 'Collecte (mois)', value: (memberFiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1)).reduce((s, f) => s + (f.montant_mobilise || 0), 0) / 1000).toFixed(0) + 'k F' },
-                                    { label: 'Fiches total', value: memberFiches.length },
+                                {[
+                                    { label: 'Comptes DAT (mois)', value: memberFiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1)).reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0) },
+                                    { label: 'SMART (mois)', value: (memberFiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1)).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0) / 1000).toFixed(0) + 'k F' },
+                                    { label: 'Écarts non réglés', value: memberFiches.filter(f => getEcart(f) !== 0 && !f.manquant_regle).length },
                                   ].map(k => (
                                     <div key={k.label} className="text-center p-2 rounded-xl" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
                                       <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{k.value}</div>
@@ -950,14 +997,15 @@ export default function DashboardChef() {
         )}
 
         {/* ════ MANQUANTS (propres manquants) ════ */}
-        {activeTab === 'manquants' && (
+{/* ════ ÉCARTS ════ */}
+{activeTab === 'manquants' && (
           <div className="space-y-4">
-            <h2 className="text-sm font-bold" style={{ color: text }}>⚠️ Mes manquants</h2>
+            <h2 className="text-sm font-bold" style={{ color: text }}>⚖️ Mes écarts</h2>
             <div className="grid grid-cols-3 gap-3">
               {[
-                { label: 'Total', value: manquantsListe.reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0).toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
-                { label: 'Non réglés', value: totalManquants.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
-                { label: 'Réglés', value: manquantsListe.filter(f => f.manquant_regle).length, color: '#166534', bg: '#F0FDF4' },
+                { label: 'Manquants', value: totalManquants.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
+                { label: 'Surplus', value: totalSurplus.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
+                { label: 'Réglés', value: ecartsListe.filter(f => f.manquant_regle).length, color: '#166534', bg: '#F0FDF4' },
               ].map(s => (
                 <div key={s.label} className="rounded-2xl p-4 text-center" style={{ backgroundColor: s.bg }}>
                   <div className="font-bold text-base" style={{ color: s.color }}>{s.value}</div>
@@ -965,45 +1013,63 @@ export default function DashboardChef() {
                 </div>
               ))}
             </div>
-            {manquantsListe.length === 0 ? (
+            {ecartsListe.length === 0 ? (
               <div className="rounded-2xl p-8 text-center" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
                 <div className="text-4xl mb-3">✅</div>
-                <div className="font-medium text-sm" style={{ color: '#166534' }}>Aucun manquant !</div>
-                <div className="text-xs mt-1" style={{ color: sub }}>Excellent travail 🎉</div>
+                <div className="font-medium text-sm" style={{ color: '#166534' }}>Aucun écart !</div>
+                <div className="text-xs mt-1" style={{ color: sub }}>Vos comptes sont équilibrés 🎉</div>
               </div>
             ) : (
               <div className="space-y-3">
-                {manquantsListe.map(fiche => {
-                  const montant = Math.max(0, (fiche.montant_mobilise || 0) - (fiche.montant_rapporte || 0))
+                {ecartsListe.map(fiche => {
+                  const ecart = getEcart(fiche)
+                  const isManquant = ecart > 0
+                  const montant = Math.abs(ecart)
+                  const regle = fiche.manquant_regle
                   return (
-                    <div key={fiche.id} className="rounded-2xl p-4" style={{ backgroundColor: card, border: `1px solid ${fiche.manquant_regle ? '#BBF7D0' : '#FECACA'}` }}>
+                    <div key={fiche.id} className="rounded-2xl p-4"
+                      style={{ backgroundColor: card, border: `1px solid ${regle ? '#BBF7D0' : isManquant ? '#FECACA' : '#C7D2FE'}` }}>
                       <div className="flex items-start justify-between mb-3">
                         <div>
                           <div className="font-semibold text-sm" style={{ color: text }}>
                             {new Date(fiche.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'long' })}
                           </div>
-                          <div className="font-bold text-xl mt-1" style={{ color: fiche.manquant_regle ? '#166534' : '#E4322C' }}>
-                            {montant.toLocaleString()} FCFA
+                          <div className="font-bold text-xl mt-1"
+                            style={{ color: regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
+                            {isManquant ? '−' : '+'} {montant.toLocaleString()} FCFA
                           </div>
                         </div>
                         <span className="text-xs px-2 py-1 rounded-full font-medium"
-                          style={{ backgroundColor: fiche.manquant_regle ? '#DCFCE7' : '#FEE2E2', color: fiche.manquant_regle ? '#166534' : '#991B1B' }}>
-                          {fiche.manquant_regle ? '✅ Réglé' : '⚠️ Non réglé'}
+                          style={{
+                            backgroundColor: regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
+                            color: regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
+                          }}>
+                          {regle ? '✅ Réglé' : isManquant ? '⚠️ Manquant' : '🔵 Surplus'}
                         </span>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <div className="rounded-xl p-2" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                          <div className="text-xs" style={{ color: sub }}>Collecté</div>
-                          <div className="font-semibold text-sm" style={{ color: text }}>{(fiche.montant_mobilise || 0).toLocaleString()} F</div>
+                          <div className="text-xs" style={{ color: sub }}>SMART (théorique)</div>
+                          <div className="font-semibold text-sm" style={{ color: text }}>
+                            {(fiche.montant_smart ?? fiche.montant_mobilise ?? 0).toLocaleString()} F
+                          </div>
                         </div>
                         <div className="rounded-xl p-2" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                          <div className="text-xs" style={{ color: sub }}>Rapporté</div>
-                          <div className="font-semibold text-sm" style={{ color: text }}>{(fiche.montant_rapporte || 0).toLocaleString()} F</div>
+                          <div className="text-xs" style={{ color: sub }}>Caisse (rapporté)</div>
+                          <div className="font-semibold text-sm" style={{ color: text }}>
+                            {(fiche.montant_caisse ?? fiche.montant_rapporte ?? 0).toLocaleString()} F
+                          </div>
                         </div>
                       </div>
-                      {!fiche.manquant_regle && (
-                        <div className="mt-3 text-xs p-3 rounded-xl" style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
-                          ⏳ En attente de confirmation par le responsable
+                      {!regle && (
+                        <div className="mt-3 text-xs p-3 rounded-xl"
+                          style={{
+                            backgroundColor: isManquant ? '#FEF9C3' : '#EEF2FF',
+                            color: isManquant ? '#854D0E' : '#2A4E94'
+                          }}>
+                          {isManquant
+                            ? '⏳ En attente de régularisation auprès de la caisse'
+                            : '⏳ En attente de confirmation du surplus'}
                         </div>
                       )}
                     </div>
@@ -1019,9 +1085,9 @@ export default function DashboardChef() {
           <div className="space-y-4">
             <h2 className="text-sm font-bold" style={{ color: text }}>📈 Mes performances</h2>
             <div className="space-y-3">
-              {[
-                { titre: "Taux d'activation", valeur: tauxActivation, objectif: 70, icon: '🎯' },
-                { titre: 'Taux de collecte', valeur: tauxCollecte, objectif: 100, icon: '💰' },
+            {[
+                { titre: 'Taux de conformité', valeur: tauxConformite, objectif: 100, icon: '🎯' },
+                { titre: 'Régularité', valeur: tauxRegularite, objectif: 100, icon: '📅' },
                 { titre: 'Score mensuel', valeur: scoreMensuel, objectif: 100, icon: '⭐' },
               ].map(ind => {
                 const atteint = ind.valeur >= ind.objectif
@@ -1075,7 +1141,7 @@ export default function DashboardChef() {
                 const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
                 const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0)
                 const fichesPrev = fiches.filter(f => new Date(f.date) >= prevStart && new Date(f.date) <= prevEnd)
-                const collectePrev = fichesPrev.reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+                const collectePrev = fichesPrev.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
                 const diff = totalCollecte - collectePrev
                 const pct = collectePrev > 0 ? Math.round((diff / collectePrev) * 100) : 0
                 return (
@@ -1329,7 +1395,7 @@ export default function DashboardChef() {
             { key: 'accueil', label: 'Accueil', icon: '🏠' },
             { key: 'fiches', label: 'Mes fiches', icon: '📋' },
             { key: 'equipe', label: 'Équipe', icon: '👥', badge: equipeStats.fichesNonValidees },
-            { key: 'manquants', label: 'Manquants', icon: '⚠️', badge: manquantsNonRegles.length },
+            { key: 'manquants', label: 'Écarts', icon: '⚖️', badge: ecartsNonRegles.length },
             { key: 'performance', label: 'Stats', icon: '📈' },
             { key: 'messages', label: 'Messages', icon: '💬', badge: messagesNonLus },
             { key: 'profil', label: 'Profil', icon: '👤' },
@@ -1372,8 +1438,20 @@ export default function DashboardChef() {
                   Fiche du {new Date(validationFiche.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
                 </div>
                 <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
-                  {(validationFiche.montant_mobilise || 0).toLocaleString()} FCFA · {validationFiche.comptes_ouverts} comptes
+                  SMART {(validationFiche.montant_smart ?? validationFiche.montant_mobilise ?? 0).toLocaleString()} F ·
+                  Caisse {(validationFiche.montant_caisse ?? validationFiche.montant_rapporte ?? 0).toLocaleString()} F ·
+                  {(validationFiche.comptes_ouverts_dat ?? validationFiche.comptes_ouverts ?? 0)} comptes DAT
                 </div>
+                {(() => {
+                  const e = (validationFiche.montant_smart ?? validationFiche.montant_mobilise ?? 0) - (validationFiche.montant_caisse ?? validationFiche.montant_rapporte ?? 0)
+                  if (e === 0) return null
+                  return (
+                    <div className="text-xs mt-1 font-semibold"
+                      style={{ color: e > 0 ? '#991B1B' : '#2A4E94' }}>
+                      {e > 0 ? '⚠️ Manquant' : '🔵 Surplus'} : {Math.abs(e).toLocaleString()} F
+                    </div>
+                  )
+                })()}
               </div>
 
               <div>
