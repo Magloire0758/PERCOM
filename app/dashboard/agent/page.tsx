@@ -177,10 +177,10 @@ export default function DashboardAgent() {
       .select('id, nom, prenom').eq('agence_id', a.agence_id).eq('statut', 'actif').eq('role', 'agent')
     if (!agentsAgence?.length) return
     const { data: fichesMois } = await supabase.from('fiches_journalieres')
-      .select('agent_id, montant_mobilise').gte('date', moisDebut)
-      .in('agent_id', agentsAgence.map(ag => ag.id))
-    const scores: Record<string, number> = {}
-    ;(fichesMois || []).forEach(f => { scores[f.agent_id] = (scores[f.agent_id] || 0) + (f.montant_mobilise || 0) })
+    .select('agent_id, montant_smart, montant_mobilise').gte('date', moisDebut)
+    .in('agent_id', agentsAgence.map(ag => ag.id))
+  const scores: Record<string, number> = {}
+  ;(fichesMois || []).forEach(f => { scores[f.agent_id] = (scores[f.agent_id] || 0) + (f.montant_smart ?? f.montant_mobilise ?? 0) })
     setClassement(agentsAgence.map(ag => ({ ...ag, score: scores[ag.id] || 0 })).sort((a, b) => b.score - a.score))
   }
 
@@ -239,16 +239,29 @@ export default function DashboardAgent() {
   }
 
   // ── Calculs ──
-  const fichesMois = fiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
-  const totalComptes = fichesMois.reduce((s, f) => s + (f.comptes_ouverts || 0), 0)
-  const totalActives = fichesMois.reduce((s, f) => s + (f.comptes_actives || 0), 0)
-  const totalCollecte = fichesMois.reduce((s, f) => s + (f.montant_mobilise || 0), 0)
-  const totalRapporte = fichesMois.reduce((s, f) => s + (f.montant_rapporte || 0), 0)
-  const totalProspects = fichesMois.reduce((s, f) => s + (f.prospects_visites || 0), 0)
-  const joursActifs = fichesMois.length
-  const tauxActivation = totalComptes > 0 ? Math.round((totalActives / totalComptes) * 100) : 0
-  const tauxCollecte = totalCollecte > 0 ? Math.round((totalRapporte / totalCollecte) * 100) : 0
-  const scoreMensuel = joursActifs > 0 ? Math.min(100, Math.round((totalComptes / (joursActifs * 6)) * 100)) : 0
+// Helper écart
+const getEcart = (f: any) => (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+
+const fichesMois = fiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+const totalComptesDat = fichesMois.reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0)
+const totalSmart = fichesMois.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
+const totalCaisse = fichesMois.reduce((s, f) => s + (f.montant_caisse ?? f.montant_rapporte ?? 0), 0)
+const totalCommissions = fichesMois.reduce((s, f) => s + (f.commission_jour || 0), 0)
+const totalAdhesions = fichesMois.reduce((s, f) => s + (f.nb_adhesions || 0), 0)
+const totalLydeCash = fichesMois.reduce((s, f) => s + (f.nb_abonnements_lyde_cash || 0), 0)
+const totalClientsParcourus = fichesMois.reduce((s, f) => s + (f.nb_clients_parcourus || 0), 0)
+const totalReactivations = fichesMois.reduce((s, f) => s + (f.reactivations?.length || 0), 0)
+const totalAugmentations = fichesMois.reduce((s, f) => s + (f.augmentations_mise?.length || 0), 0)
+const totalAssurancesNb = fichesMois.reduce((s, f) => s + (f.assurances_details?.reduce((a: number, x: any) => a + (x.nb || 0), 0) || 0), 0)
+const joursActifs = fichesMois.length
+// Taux de conformité : % de jours sans écart
+const joursSansEcart = fichesMois.filter(f => getEcart(f) === 0).length
+const tauxConformite = joursActifs > 0 ? Math.round((joursSansEcart / joursActifs) * 100) : 0
+const tauxRegularite = Math.min(100, Math.round((joursActifs / new Date().getDate()) * 100))
+const scoreMensuel = joursActifs > 0 ? Math.min(100, Math.round((totalComptesDat / (joursActifs * 6)) * 100)) : 0
+
+// Compat : totalCollecte = SMART
+const totalCollecte = totalSmart
 
   // Streak
   const streak = (() => {
@@ -262,9 +275,12 @@ export default function DashboardAgent() {
     return count
   })()
 
-  const manquantsListe = fiches.filter(f => Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0)
-  const manquantsNonRegles = manquantsListe.filter(f => !f.manquant_regle)
-  const totalManquants = manquantsNonRegles.reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
+  const ecartsListe = fiches.filter(f => getEcart(f) !== 0)
+  const ecartsNonRegles = ecartsListe.filter(f => !f.manquant_regle)
+  const manquantsNonRegles = ecartsNonRegles.filter(f => getEcart(f) > 0)
+  const surplusNonRegles = ecartsNonRegles.filter(f => getEcart(f) < 0)
+  const totalManquants = manquantsNonRegles.reduce((s, f) => s + getEcart(f), 0)
+  const totalSurplus = Math.abs(surplusNonRegles.reduce((s, f) => s + getEcart(f), 0))
   const monRang = classement.findIndex(a => a.id === agent?.id) + 1
   const notifNonLues = notifications.filter(n => !n.lu).length
   const messagesNonLus = messages.filter(m => m.destinataire_id === agent?.id && !m.lu).length
@@ -282,7 +298,7 @@ export default function DashboardAgent() {
     const d = new Date(); d.setDate(d.getDate() - (6 - i))
     const dateStr = d.toISOString().split('T')[0]
     const fiche = fiches.find(f => f.date === dateStr)
-    return { jour: d.toLocaleDateString('fr-FR', { weekday: 'short' }), montant: fiche?.montant_mobilise || 0, comptes: fiche?.comptes_ouverts || 0 }
+    return { jour: d.toLocaleDateString('fr-FR', { weekday: 'short' }), montant: (fiche?.montant_smart ?? fiche?.montant_mobilise ?? 0), comptes: (fiche?.comptes_ouverts_dat ?? fiche?.comptes_ouverts ?? 0) }
   })
 
   const messagesConv = selectedContact ? messages.filter(m =>
@@ -353,11 +369,11 @@ export default function DashboardAgent() {
               )}
             </button>
 
-            {totalManquants > 0 && (
+            {ecartsNonRegles.length > 0 && (
               <button type="button" onClick={() => setActiveTab('manquants')}
                 className="hidden md:flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium"
-                style={{ backgroundColor: '#E4322C', color: 'white' }}>
-                ⚠️ {totalManquants.toLocaleString()} F
+                style={{ backgroundColor: totalManquants > 0 ? '#E4322C' : '#2A4E94', color: 'white' }}>
+                ⚖️ {ecartsNonRegles.length} écart(s)
               </button>
             )}
           </div>
@@ -424,9 +440,9 @@ export default function DashboardAgent() {
 
               {/* Score du mois */}
               <div className="grid grid-cols-3 gap-3">
-                {[
-                  { label: 'Activation', value: `${tauxActivation}%`, icon: '🎯' },
-                  { label: 'Collecte', value: `${tauxCollecte}%`, icon: '💰' },
+              {[
+                  { label: 'Conformité', value: `${tauxConformite}%`, icon: '🎯' },
+                  { label: 'Régularité', value: `${tauxRegularite}%`, icon: '📅' },
                   { label: 'Score', value: `${scoreMensuel}%`, icon: '⭐' },
                 ].map(s => (
                   <div key={s.label} className="text-center p-3 rounded-xl"
@@ -503,25 +519,36 @@ export default function DashboardAgent() {
 
 </div>
 
-            {/* Alerte manquants */}
-            {totalManquants > 0 && (
+{/* Alerte écarts */}
+{ecartsNonRegles.length > 0 && (
               <button type="button" onClick={() => setActiveTab('manquants')}
                 className="w-full rounded-2xl p-4 flex items-center justify-between text-left"
-                style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA' }}>
+                style={{
+                  backgroundColor: manquantsNonRegles.length > 0 ? '#FEF2F2' : '#EEF2FF',
+                  border: `1px solid ${manquantsNonRegles.length > 0 ? '#FECACA' : '#C7D2FE'}`
+                }}>
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
-                    style={{ backgroundColor: '#FEE2E2' }}>⚠️</div>
+                    style={{ backgroundColor: manquantsNonRegles.length > 0 ? '#FEE2E2' : '#E0E7FF' }}>
+                    {manquantsNonRegles.length > 0 ? '⚠️' : '🔵'}
+                  </div>
                   <div>
-                    <div className="font-semibold text-sm" style={{ color: '#991B1B' }}>
-                      {manquantsNonRegles.length} manquant(s) non réglé(s)
+                    <div className="font-semibold text-sm"
+                      style={{ color: manquantsNonRegles.length > 0 ? '#991B1B' : '#2A4E94' }}>
+                      {ecartsNonRegles.length} écart(s) non réglé(s)
                     </div>
-                    <div className="text-xs" style={{ color: '#B91C1C' }}>
-                      {totalManquants.toLocaleString()} FCFA au total
+                    <div className="text-xs" style={{ color: manquantsNonRegles.length > 0 ? '#B91C1C' : '#2A4E94' }}>
+                      {totalManquants > 0 && `⚠️ ${totalManquants.toLocaleString()} F manquant`}
+                      {totalManquants > 0 && totalSurplus > 0 && ' · '}
+                      {totalSurplus > 0 && `🔵 ${totalSurplus.toLocaleString()} F surplus`}
                     </div>
                   </div>
                 </div>
                 <span className="text-xs px-2 py-1 rounded-full font-medium"
-                  style={{ backgroundColor: '#FEE2E2', color: '#991B1B' }}>Voir →</span>
+                  style={{
+                    backgroundColor: manquantsNonRegles.length > 0 ? '#FEE2E2' : '#E0E7FF',
+                    color: manquantsNonRegles.length > 0 ? '#991B1B' : '#2A4E94'
+                  }}>Voir →</span>
               </button>
             )}
 
@@ -616,8 +643,9 @@ export default function DashboardAgent() {
                 <h2 className="text-sm font-bold mb-3" style={{ color: text }}>🎯 Mes objectifs</h2>
                 <div className="space-y-2">
                   {objectifs.slice(0, 2).map(obj => {
-                    const progression = obj.cible_montant > 0
-                      ? Math.min(100, Math.round((totalCollecte / obj.cible_montant) * 100)) : 0
+                    const cible = obj.cible_montant_smart || 0
+                    const progression = cible > 0
+                      ? Math.min(100, Math.round((totalSmart / cible) * 100)) : 0
                     return (
                       <div key={obj.id} className="rounded-2xl p-4" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
                         <div className="flex items-center justify-between mb-2">
@@ -632,8 +660,8 @@ export default function DashboardAgent() {
                             style={{ width: `${progression}%`, backgroundColor: progression >= 100 ? '#22C55E' : '#2A4E94' }} />
                         </div>
                         <div className="flex justify-between text-xs" style={{ color: sub }}>
-                          <span>{totalCollecte.toLocaleString()} F</span>
-                          <span>{progression}% — objectif {(obj.cible_montant || 0).toLocaleString()} F</span>
+                          <span>{totalSmart.toLocaleString()} F</span>
+                          <span>{progression}% — objectif {cible.toLocaleString()} F</span>
                         </div>
                       </div>
                     )
@@ -646,11 +674,15 @@ export default function DashboardAgent() {
             <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
               <h2 className="text-sm font-bold mb-4" style={{ color: text }}>📊 Résumé du mois</h2>
               <div className="grid grid-cols-2 gap-3">
-                {[
+              {[
                   { label: 'Jours actifs', value: joursActifs, icon: '📅' },
-                  { label: 'Comptes ouverts', value: totalComptes, icon: '🏦' },
-                  { label: 'Prospects visités', value: totalProspects, icon: '👥' },
-                  { label: 'Montant collecté', value: totalCollecte.toLocaleString() + ' F', icon: '💵' },
+                  { label: 'Comptes DAT', value: totalComptesDat, icon: '🏦' },
+                  { label: 'Collecté (SMART)', value: totalSmart.toLocaleString() + ' F', icon: '💵' },
+                  { label: 'Commissions', value: totalCommissions.toLocaleString() + ' F', icon: '💰' },
+                  { label: 'Adhésions', value: totalAdhesions, icon: '👥' },
+                  { label: 'Lydé Cash', value: totalLydeCash, icon: '📱' },
+                  { label: 'Réactivations', value: totalReactivations, icon: '🔄' },
+                  { label: 'Augm. mise', value: totalAugmentations, icon: '📈' },
                 ].map(item => (
                   <div key={item.label} className="text-center p-3 rounded-xl"
                     style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
@@ -736,7 +768,6 @@ export default function DashboardAgent() {
     ) : (
       <div className="space-y-3">
         {fichesFiltrees.map(fiche => {
-          const manq = Math.max(0, (fiche.montant_mobilise || 0) - (fiche.montant_rapporte || 0))
           const statutColor = fiche.statut_validation === 'validee'
             ? { bg: '#DCFCE7', color: '#166534', label: '✅ Validée' }
             : fiche.statut_validation === 'rejetee'
@@ -757,7 +788,7 @@ export default function DashboardAgent() {
                       {new Date(fiche.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
                     </div>
                     <div className="text-xs mt-0.5" style={{ color: sub }}>
-                      {(fiche.montant_mobilise || 0).toLocaleString()} F collectés
+                      SMART {(fiche.montant_smart ?? fiche.montant_mobilise ?? 0).toLocaleString()} F
                     </div>
                   </div>
                   <div className="flex gap-1 flex-wrap justify-end">
@@ -765,10 +796,13 @@ export default function DashboardAgent() {
                       style={{ backgroundColor: statutColor.bg, color: statutColor.color }}>
                       {statutColor.label}
                     </span>
-                    {manq > 0 && (
+                    {getEcart(fiche) !== 0 && (
                       <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                        style={{ backgroundColor: fiche.manquant_regle ? '#DCFCE7' : '#FEE2E2', color: fiche.manquant_regle ? '#166534' : '#991B1B' }}>
-                        ⚠️ {manq.toLocaleString()} F
+                        style={{
+                          backgroundColor: fiche.manquant_regle ? '#DCFCE7' : getEcart(fiche) > 0 ? '#FEE2E2' : '#E0E7FF',
+                          color: fiche.manquant_regle ? '#166534' : getEcart(fiche) > 0 ? '#991B1B' : '#2A4E94'
+                        }}>
+                        {fiche.manquant_regle ? '✅' : getEcart(fiche) > 0 ? '⚠️' : '🔵'} {Math.abs(getEcart(fiche)).toLocaleString()} F
                       </span>
                     )}
                   </div>
@@ -776,18 +810,27 @@ export default function DashboardAgent() {
 
                 {/* Mini stats */}
                 <div className="grid grid-cols-4 gap-1">
-                  {[
-                    { label: 'SMART', value: (fiche.montant_smart || 0).toLocaleString() + 'F' },
-                    { label: 'Caisse', value: (fiche.montant_caisse || 0).toLocaleString() + 'F' },
-                    { label: 'Réact.', value: fiche.reactivations?.length || 0 },
-                    { label: 'Augm.', value: fiche.augmentations_mise?.length || 0 },
-                  ].map(k => (
-                    <div key={k.label} className="text-center p-1.5 rounded-lg"
-                      style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                      <div className="font-bold text-xs" style={{ color: '#2A4E94' }}>{k.value}</div>
-                      <div style={{ fontSize: '9px', color: sub }}>{k.label}</div>
-                    </div>
-                  ))}
+                {[
+                    { label: 'SMART', value: (ficheDuJour.montant_smart ?? ficheDuJour.montant_mobilise ?? 0).toLocaleString() + ' F', objectif: 25000, raw: ficheDuJour.montant_smart ?? ficheDuJour.montant_mobilise ?? 0 },
+                    { label: 'Commission', value: (ficheDuJour.commission_jour || 0).toLocaleString() + ' F', objectif: 5000, raw: ficheDuJour.commission_jour || 0 },
+                    { label: 'Comptes DAT', value: ficheDuJour.comptes_ouverts_dat ?? ficheDuJour.comptes_ouverts ?? 0, objectif: 6, raw: ficheDuJour.comptes_ouverts_dat ?? ficheDuJour.comptes_ouverts ?? 0 },
+                    { label: 'Adhésions', value: ficheDuJour.nb_adhesions || 0, objectif: 5, raw: ficheDuJour.nb_adhesions || 0 },
+                    { label: 'Réactivations', value: ficheDuJour.reactivations?.length || 0, objectif: 3, raw: ficheDuJour.reactivations?.length || 0 },
+                    { label: 'Augm. mise', value: ficheDuJour.augmentations_mise?.length || 0, objectif: 3, raw: ficheDuJour.augmentations_mise?.length || 0 },
+                  ].map(k => {
+                    const pct = Math.min(100, Math.round((k.raw / k.objectif) * 100))
+                    const color = pct >= 100 ? '#166534' : pct >= 50 ? '#854D0E' : '#991B1B'
+                    const barColor = pct >= 100 ? '#22C55E' : pct >= 50 ? '#EAB308' : '#EF4444'
+                    return (
+                      <div key={k.label} className="rounded-2xl p-3" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
+                        <div className="text-xs mb-1" style={{ color: sub }}>{k.label}</div>
+                        <div className="font-bold text-base" style={{ color }}>{k.value}</div>
+                        <div className="w-full h-1.5 rounded-full mt-2" style={{ backgroundColor: isDark ? '#334155' : '#f1f5f9' }}>
+                          <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, backgroundColor: barColor }} />
+                        </div>
+                      </div>
+                    )
+                  })}
                 </div>
 
                 <div className="text-xs mt-2 text-right" style={{ color: sub }}>
@@ -810,16 +853,17 @@ export default function DashboardAgent() {
 )}
 
         {/* ════ MANQUANTS ════ */}
-        {activeTab === 'manquants' && (
+{/* ════ ÉCARTS ════ */}
+{activeTab === 'manquants' && (
           <div className="space-y-4">
-            <h2 className="text-sm font-bold" style={{ color: text }}>⚠️ Mes manquants</h2>
+            <h2 className="text-sm font-bold" style={{ color: text }}>⚖️ Mes écarts</h2>
 
             {/* Stats */}
             <div className="grid grid-cols-3 gap-3">
               {[
-                { label: 'Total', value: manquantsListe.reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0).toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
-                { label: 'Non réglés', value: totalManquants.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
-                { label: 'Réglés', value: manquantsListe.filter(f => f.manquant_regle).length, color: '#166534', bg: '#F0FDF4' },
+                { label: 'Manquants', value: totalManquants.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
+                { label: 'Surplus', value: totalSurplus.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
+                { label: 'Réglés', value: ecartsListe.filter(f => f.manquant_regle).length, color: '#166534', bg: '#F0FDF4' },
               ].map(s => (
                 <div key={s.label} className="rounded-2xl p-4 text-center" style={{ backgroundColor: s.bg }}>
                   <div className="font-bold text-base" style={{ color: s.color }}>{s.value}</div>
@@ -828,41 +872,56 @@ export default function DashboardAgent() {
               ))}
             </div>
 
-            {manquantsListe.length === 0 ? (
+            {ecartsListe.length === 0 ? (
               <div className="rounded-2xl p-8 text-center" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
                 <div className="text-4xl mb-3">✅</div>
-                <div className="font-medium text-sm" style={{ color: '#166534' }}>Aucun manquant !</div>
-                <div className="text-xs mt-1" style={{ color: sub }}>Excellent travail 🎉</div>
+                <div className="font-medium text-sm" style={{ color: '#166534' }}>Aucun écart !</div>
+                <div className="text-xs mt-1" style={{ color: sub }}>Vos comptes sont parfaitement équilibrés 🎉</div>
               </div>
             ) : (
               <div className="space-y-3">
-                {manquantsListe.map(fiche => {
-                  const montant = Math.max(0, (fiche.montant_mobilise || 0) - (fiche.montant_rapporte || 0))
+                {ecartsListe.map(fiche => {
+                  const ecart = getEcart(fiche)
+                  const isManquant = ecart > 0
+                  const montant = Math.abs(ecart)
+                  const regle = fiche.manquant_regle
                   return (
-                    <div key={fiche.id} className="rounded-2xl p-4" style={{ backgroundColor: card, border: `1px solid ${fiche.manquant_regle ? '#BBF7D0' : '#FECACA'}` }}>
+                    <div key={fiche.id} className="rounded-2xl p-4"
+                      style={{
+                        backgroundColor: card,
+                        border: `1px solid ${regle ? '#BBF7D0' : isManquant ? '#FECACA' : '#C7D2FE'}`
+                      }}>
                       <div className="flex items-start justify-between mb-3">
                         <div>
                           <div className="font-semibold text-sm" style={{ color: text }}>
                             {new Date(fiche.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })}
                           </div>
-                          <div className="font-bold text-xl mt-1" style={{ color: fiche.manquant_regle ? '#166534' : '#E4322C' }}>
-                            {montant.toLocaleString()} FCFA
+                          <div className="font-bold text-xl mt-1"
+                            style={{ color: regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
+                            {isManquant ? '−' : '+'} {montant.toLocaleString()} FCFA
                           </div>
                         </div>
                         <span className="text-xs px-2 py-1 rounded-full font-medium"
-                          style={{ backgroundColor: fiche.manquant_regle ? '#DCFCE7' : '#FEE2E2', color: fiche.manquant_regle ? '#166534' : '#991B1B' }}>
-                          {fiche.manquant_regle ? '✅ Réglé' : '⚠️ Non réglé'}
+                          style={{
+                            backgroundColor: regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
+                            color: regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
+                          }}>
+                          {regle ? '✅ Réglé' : isManquant ? '⚠️ Manquant' : '🔵 Surplus'}
                         </span>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
                         <div className="rounded-xl p-2" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                          <div className="text-xs" style={{ color: sub }}>Collecté</div>
-                          <div className="font-semibold text-sm" style={{ color: text }}>{(fiche.montant_mobilise || 0).toLocaleString()} F</div>
+                          <div className="text-xs" style={{ color: sub }}>SMART (théorique)</div>
+                          <div className="font-semibold text-sm" style={{ color: text }}>
+                            {(fiche.montant_smart ?? fiche.montant_mobilise ?? 0).toLocaleString()} F
+                          </div>
                         </div>
                         <div className="rounded-xl p-2" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                          <div className="text-xs" style={{ color: sub }}>Rapporté</div>
-                          <div className="font-semibold text-sm" style={{ color: text }}>{(fiche.montant_rapporte || 0).toLocaleString()} F</div>
+                          <div className="text-xs" style={{ color: sub }}>Caisse (rapporté)</div>
+                          <div className="font-semibold text-sm" style={{ color: text }}>
+                            {(fiche.montant_caisse ?? fiche.montant_rapporte ?? 0).toLocaleString()} F
+                          </div>
                         </div>
                       </div>
 
@@ -872,9 +931,15 @@ export default function DashboardAgent() {
                         </div>
                       )}
 
-                      {!fiche.manquant_regle && (
-                        <div className="mt-3 text-xs p-3 rounded-xl" style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
-                          ⏳ En attente de confirmation par le chef
+                      {!regle && (
+                        <div className="mt-3 text-xs p-3 rounded-xl"
+                          style={{
+                            backgroundColor: isManquant ? '#FEF9C3' : '#EEF2FF',
+                            color: isManquant ? '#854D0E' : '#2A4E94'
+                          }}>
+                          {isManquant
+                            ? '⏳ En attente de régularisation auprès de la caisse'
+                            : '⏳ En attente de confirmation du surplus par le chef'}
                         </div>
                       )}
                     </div>
@@ -892,9 +957,9 @@ export default function DashboardAgent() {
 
             {/* Indicateurs mois */}
             <div className="space-y-3">
-              {[
-                { titre: "Taux d'activation", valeur: tauxActivation, objectif: 70, icon: '🎯', color: '#2A4E94' },
-                { titre: 'Taux de collecte', valeur: tauxCollecte, objectif: 100, icon: '💰', color: '#166534' },
+            {[
+                { titre: 'Taux de conformité', valeur: tauxConformite, objectif: 100, icon: '🎯', color: '#2A4E94' },
+                { titre: 'Régularité', valeur: tauxRegularite, objectif: 100, icon: '📅', color: '#166534' },
                 { titre: 'Score mensuel', valeur: scoreMensuel, objectif: 100, icon: '⭐', color: '#854D0E' },
               ].map(ind => {
                 const atteint = ind.valeur >= ind.objectif
@@ -976,11 +1041,11 @@ export default function DashboardAgent() {
             <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
               <h3 className="font-semibold text-sm mb-4" style={{ color: text }}>🎯 Radar performance mensuelle</h3>
               <div className="space-y-3">
-                {[
-                  { label: 'Collecte', value: tauxCollecte, max: 100 },
-                  { label: 'Activation comptes', value: tauxActivation, max: 100 },
-                  { label: 'Prospection', value: totalProspects > 0 ? Math.min(100, Math.round((totalProspects / (joursActifs * 10)) * 100)) : 0, max: 100 },
-                  { label: 'Régularité', value: joursActifs > 0 ? Math.min(100, Math.round((joursActifs / new Date().getDate()) * 100)) : 0, max: 100 },
+              {[
+                  { label: 'Conformité caisse', value: tauxConformite, max: 100 },
+                  { label: 'Comptes DAT', value: joursActifs > 0 ? Math.min(100, Math.round((totalComptesDat / (joursActifs * 6)) * 100)) : 0, max: 100 },
+                  { label: 'Adhésions', value: joursActifs > 0 ? Math.min(100, Math.round((totalAdhesions / (joursActifs * 5)) * 100)) : 0, max: 100 },
+                  { label: 'Régularité', value: tauxRegularite, max: 100 },
                 ].map(r => {
                   const color = r.value >= 80 ? '#22C55E' : r.value >= 50 ? '#EAB308' : '#EF4444'
                   return (
@@ -1354,7 +1419,7 @@ export default function DashboardAgent() {
           {[
             { key: 'accueil', label: 'Accueil', icon: '🏠' },
             { key: 'fiches', label: 'Fiches', icon: '📋' },
-            { key: 'manquants', label: 'Manquants', icon: '⚠️', badge: manquantsNonRegles.length },
+            { key: 'manquants', label: 'Écarts', icon: '⚖️', badge: ecartsNonRegles.length },
             { key: 'performance', label: 'Stats', icon: '📈' },
             { key: 'messages', label: 'Messages', icon: '💬', badge: messagesNonLus },
             { key: 'profil', label: 'Profil', icon: '👤' },
