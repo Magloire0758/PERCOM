@@ -17,7 +17,10 @@ export default function FicheDetail({
   const border = isDark ? '#334155' : '#f1f5f9'
   const bg = isDark ? '#0f172a' : '#f8fafc'
 
-  const manq = Math.max(0, (fiche.montant_mobilise || 0) - (fiche.montant_rapporte || 0))
+  const smart = fiche.montant_smart ?? fiche.montant_mobilise ?? 0
+  const caisse = fiche.montant_caisse ?? fiche.montant_rapporte ?? 0
+  const ecart = smart - caisse
+  const typeEcart = ecart > 0 ? 'manquant' : ecart < 0 ? 'surplus' : 'ok'
   const totalDepots = (fiche.montant_depot_pe || 0) + (fiche.montant_depot_dat || 0) + (fiche.montant_depot_dav || 0)
 
   const statutColor = fiche.statut_validation === 'validee'
@@ -63,14 +66,13 @@ export default function FicheDetail({
         )}
       </div>
 
-      {/* ── Montants ── */}
-      <div className="p-5 border-b" style={{ borderColor: border }}>
-        <h4 className="font-semibold text-xs mb-3" style={{ color: sub }}>💰 MONTANTS COLLECTÉS</h4>
-        <div className="grid grid-cols-2 gap-2">
+{/* ── Montants ── */}
+<div className="p-5 border-b" style={{ borderColor: border }}>
+        <h4 className="font-semibold text-xs mb-3" style={{ color: sub }}>💰 MONTANTS</h4>
+        <div className="grid grid-cols-3 gap-2">
           {[
-            { label: 'Montant SMART', value: (fiche.montant_smart || 0).toLocaleString() + ' F', color: '#2A4E94' },
-            { label: 'Montant Caisse', value: (fiche.montant_caisse || 0).toLocaleString() + ' F', color: '#2A4E94' },
-            { label: 'Total collecté', value: (fiche.montant_mobilise || 0).toLocaleString() + ' F', color: '#166534' },
+            { label: 'SMART (théorique)', value: (fiche.montant_smart ?? fiche.montant_mobilise ?? 0).toLocaleString() + ' F', color: '#2A4E94' },
+            { label: 'Caisse (rapporté)', value: (fiche.montant_caisse ?? fiche.montant_rapporte ?? 0).toLocaleString() + ' F', color: '#2A4E94' },
             { label: 'Commission', value: (fiche.commission_jour || 0).toLocaleString() + ' F', color: '#854D0E' },
           ].map(k => (
             <div key={k.label} className="rounded-xl p-3" style={{ backgroundColor: bg }}>
@@ -80,20 +82,46 @@ export default function FicheDetail({
           ))}
         </div>
 
-        {/* Manquant */}
-        {manq > 0 && (
-          <div className="mt-3 rounded-xl p-3 flex items-center justify-between"
-            style={{ backgroundColor: fiche.manquant_regle ? '#F0FDF4' : '#FEF2F2', border: `1px solid ${fiche.manquant_regle ? '#BBF7D0' : '#FECACA'}` }}>
+        {/* Écart : manquant ou surplus */}
+        <div className="mt-3 rounded-xl p-4"
+          style={{
+            backgroundColor: typeEcart === 'ok' ? '#F0FDF4'
+              : fiche.manquant_regle ? '#F0FDF4'
+              : typeEcart === 'manquant' ? '#FEF2F2' : '#EEF2FF',
+            border: `1px solid ${typeEcart === 'ok' ? '#BBF7D0'
+              : fiche.manquant_regle ? '#BBF7D0'
+              : typeEcart === 'manquant' ? '#FECACA' : '#C7D2FE'}`
+          }}>
+          <div className="flex items-center justify-between">
             <div>
-              <div className="text-xs font-medium" style={{ color: fiche.manquant_regle ? '#166534' : '#991B1B' }}>
-                {fiche.manquant_regle ? '✅ Manquant réglé' : '⚠️ Manquant non réglé'}
+              <div className="text-xs font-medium"
+                style={{
+                  color: typeEcart === 'ok' ? '#166534'
+                    : fiche.manquant_regle ? '#166534'
+                    : typeEcart === 'manquant' ? '#991B1B' : '#2A4E94'
+                }}>
+                {typeEcart === 'ok' ? '✅ Aucun écart'
+                  : fiche.manquant_regle
+                    ? (typeEcart === 'manquant' ? '✅ Manquant réglé' : '✅ Surplus régularisé')
+                    : (typeEcart === 'manquant' ? '⚠️ Manquant non réglé' : '🔵 Surplus non régularisé')}
               </div>
-              <div className="font-bold text-lg" style={{ color: fiche.manquant_regle ? '#166534' : '#E4322C' }}>
-                {manq.toLocaleString()} FCFA
-              </div>
+              {typeEcart !== 'ok' && (
+                <div className="font-bold text-lg mt-0.5"
+                  style={{
+                    color: fiche.manquant_regle ? '#166534'
+                      : typeEcart === 'manquant' ? '#E4322C' : '#2A4E94'
+                  }}>
+                  {Math.abs(ecart).toLocaleString()} FCFA
+                </div>
+              )}
             </div>
+            {fiche.manquant_regle_at && (
+              <div className="text-xs text-right" style={{ color: sub }}>
+                Réglé le<br />{new Date(fiche.manquant_regle_at).toLocaleDateString('fr-FR')}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* ── Activités ── */}

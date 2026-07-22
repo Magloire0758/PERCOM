@@ -87,8 +87,13 @@ export default function FicheJournaliere() {
   const today = new Date().toISOString().split('T')[0]
 
   // Calculs automatiques
-  const montantTotal = (parseFloat(form.montant_smart) || 0) + (parseFloat(form.montant_caisse) || 0)
-  const montantRapporte = montantTotal // À ajuster si besoin
+
+
+  // Calculs automatiques
+  const montantSmart = parseFloat(form.montant_smart) || 0
+  const montantCaisse = parseFloat(form.montant_caisse) || 0
+  const ecart = montantSmart - montantCaisse
+  const typeEcart = ecart > 0 ? 'manquant' : ecart < 0 ? 'surplus' : 'ok'
   const totalAutresDepots = (parseFloat(form.montant_depot_pe) || 0) + (parseFloat(form.montant_depot_dat) || 0) + (parseFloat(form.montant_depot_dav) || 0)
   const totalReactivations = reactivations.reduce((s, r) => s + (parseFloat(r.montant_cotise) || 0), 0)
   const totalAugmentations = augmentations.length
@@ -171,10 +176,10 @@ export default function FicheJournaliere() {
         comptes_ouverts_dat: parseInt(form.comptes_ouverts_dat) || 0,
         comptes_ouverts: parseInt(form.comptes_ouverts_dat) || 0, // compatibilité
         // Montants
-        montant_smart: parseFloat(form.montant_smart) || 0,
-        montant_caisse: parseFloat(form.montant_caisse) || 0,
-        montant_mobilise: montantTotal,
-        montant_rapporte: montantTotal,
+        montant_smart: montantSmart,
+        montant_caisse: montantCaisse,
+        montant_mobilise: montantSmart,      // théorique terrain
+        montant_rapporte: montantCaisse,     // effectivement rapporté
         commission_jour: parseFloat(form.commission_jour) || 0,
         // Activités
         nb_clients_parcourus: parseInt(form.nb_clients_parcourus) || 0,
@@ -287,11 +292,11 @@ export default function FicheJournaliere() {
             <div className="rounded-2xl p-4" style={{ backgroundColor: '#f8fafc' }}>
               <div className="text-xs font-semibold mb-2" style={{ color: '#818387' }}>💰 MONTANTS</div>
               <div className="grid grid-cols-2 gap-2">
-                {[
+              {[
                   { label: 'SMART', value: (ficheDuJour.montant_smart || 0).toLocaleString() + ' F' },
                   { label: 'Caisse', value: (ficheDuJour.montant_caisse || 0).toLocaleString() + ' F' },
                   { label: 'Commission', value: (ficheDuJour.commission_jour || 0).toLocaleString() + ' F' },
-                  { label: 'Total', value: (ficheDuJour.montant_mobilise || 0).toLocaleString() + ' F' },
+                  { label: (() => { const e = (ficheDuJour.montant_smart || 0) - (ficheDuJour.montant_caisse || 0); return e > 0 ? '⚠️ Manquant' : e < 0 ? '🔵 Surplus' : '✅ Écart' })(), value: Math.abs((ficheDuJour.montant_smart || 0) - (ficheDuJour.montant_caisse || 0)).toLocaleString() + ' F' },
                 ].map(item => (
                   <div key={item.label} className="rounded-xl p-2" style={{ backgroundColor: 'white' }}>
                     <div className="text-xs" style={{ color: '#818387' }}>{item.label}</div>
@@ -390,12 +395,15 @@ export default function FicheJournaliere() {
             ouverte={sectionsOuvertes.montants}
             onToggle={() => toggleSection('montants')}>
             <div className="space-y-4">
+            <div className="p-3 rounded-xl text-xs" style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                ℹ️ <strong>SMART</strong> = montant théorique collecté sur le terrain · <strong>Caisse</strong> = montant effectivement rapporté. L&apos;écart entre les deux constitue le manquant ou le surplus.
+              </div>
               <div className="grid grid-cols-2 gap-4">
-                <Field label="Montant SMART (FCFA)"
+              <Field label="Montant SMART (théorique)"
                   value={form.montant_smart}
                   onChange={v => setForm(p => ({ ...p, montant_smart: v }))}
                   type="number" suffix="F" placeholder="0" />
-                <Field label="Montant Caisse (FCFA)"
+                <Field label="Montant Caisse (rapporté)"
                   value={form.montant_caisse}
                   onChange={v => setForm(p => ({ ...p, montant_caisse: v }))}
                   type="number" suffix="F" placeholder="0" />
@@ -405,14 +413,36 @@ export default function FicheJournaliere() {
                 onChange={v => setForm(p => ({ ...p, commission_jour: v }))}
                 type="number" suffix="F" placeholder="0" />
 
-              {/* Total automatique */}
-              {montantTotal > 0 && (
-                <div className="rounded-xl p-3 flex items-center justify-between"
-                  style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0' }}>
-                  <span className="text-sm font-medium" style={{ color: '#166534' }}>Total collecté</span>
-                  <span className="font-bold text-lg" style={{ color: '#166534' }}>
-                    {montantTotal.toLocaleString()} FCFA
-                  </span>
+{/* Écart automatique */}
+{(montantSmart > 0 || montantCaisse > 0) && (
+                <div className="rounded-xl p-4"
+                  style={{
+                    backgroundColor: typeEcart === 'ok' ? '#F0FDF4' : typeEcart === 'manquant' ? '#FEF2F2' : '#EEF2FF',
+                    border: `1px solid ${typeEcart === 'ok' ? '#BBF7D0' : typeEcart === 'manquant' ? '#FECACA' : '#C7D2FE'}`
+                  }}>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium"
+                      style={{ color: typeEcart === 'ok' ? '#166534' : typeEcart === 'manquant' ? '#991B1B' : '#2A4E94' }}>
+                      {typeEcart === 'ok' ? '✅ Aucun écart' : typeEcart === 'manquant' ? '⚠️ Manquant' : '🔵 Surplus'}
+                    </span>
+                    <span className="font-bold text-xl"
+                      style={{ color: typeEcart === 'ok' ? '#166534' : typeEcart === 'manquant' ? '#E4322C' : '#2A4E94' }}>
+                      {Math.abs(ecart).toLocaleString()} F
+                    </span>
+                  </div>
+                  <div className="text-xs" style={{ color: '#818387' }}>
+                    SMART {montantSmart.toLocaleString()} F − Caisse {montantCaisse.toLocaleString()} F
+                  </div>
+                  {typeEcart === 'manquant' && (
+                    <div className="text-xs mt-1" style={{ color: '#991B1B' }}>
+                      Vous devez régulariser ce montant auprès de la caisse.
+                    </div>
+                  )}
+                  {typeEcart === 'surplus' && (
+                    <div className="text-xs mt-1" style={{ color: '#2A4E94' }}>
+                      Vous avez rapporté plus que le montant théorique.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -764,9 +794,11 @@ export default function FicheJournaliere() {
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
             <h3 className="font-semibold text-sm mb-4" style={{ color: '#1a1a2e' }}>📊 Récapitulatif</h3>
             <div className="grid grid-cols-2 gap-2 text-xs">
-              {[
-                { label: 'Total collecté', value: montantTotal.toLocaleString() + ' F', color: '#166534' },
-                { label: 'Commission', value: (parseFloat(form.commission_jour) || 0).toLocaleString() + ' F', color: '#2A4E94' },
+            {[
+                { label: 'Montant SMART', value: montantSmart.toLocaleString() + ' F', color: '#2A4E94' },
+                { label: 'Montant Caisse', value: montantCaisse.toLocaleString() + ' F', color: '#2A4E94' },
+                { label: typeEcart === 'manquant' ? '⚠️ Manquant' : typeEcart === 'surplus' ? '🔵 Surplus' : '✅ Écart', value: Math.abs(ecart).toLocaleString() + ' F', color: typeEcart === 'ok' ? '#166534' : typeEcart === 'manquant' ? '#991B1B' : '#2A4E94' },
+                { label: 'Commission', value: (parseFloat(form.commission_jour) || 0).toLocaleString() + ' F', color: '#854D0E' },
                 { label: 'Comptes DAT', value: form.comptes_ouverts_dat || '0', color: '#2A4E94' },
                 { label: 'Adhésions', value: form.nb_adhesions || '0', color: '#2A4E94' },
                 { label: 'Lydé Cash', value: form.nb_abonnements_lyde_cash || '0', color: '#2A4E94' },
