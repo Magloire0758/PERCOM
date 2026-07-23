@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import FicheDetail from '@/components/FicheDetail'
+import FicheDetailModal from '@/components/FicheDetailModal'
 
 type ActiveTab = 'accueil' | 'fiches' | 'equipe' | 'manquants' | 'performance' | 'messages' | 'profil'
 
@@ -30,6 +31,12 @@ export default function DashboardChef() {
   const [selectedMember, setSelectedMember] = useState<any>(null)
   const [memberFiches, setMemberFiches] = useState<any[]>([])
   const [memberLoadingFiches, setMemberLoadingFiches] = useState(false)
+  // Compteurs fiches en attente par membre
+  const [membersPending, setMembersPending] = useState<Record<string, number>>({})
+
+  // Modal détail fiche
+  const [detailFiche, setDetailFiche] = useState<any>(null)
+  const [detailCanValidate, setDetailCanValidate] = useState(false)
   const [equipeStats, setEquipeStats] = useState({
     totalComptes: 0, totalCollecte: 0, totalCommissions: 0,
     totalManquants: 0, totalSurplus: 0, nbEcarts: 0, fichesNonValidees: 0
@@ -206,6 +213,19 @@ export default function DashboardChef() {
     const { data: members } = await supabase.from('agents')
       .select('*, agences(nom)').eq('equipe_id', a.equipe_id).neq('id', a.id)
     setEquipeMembers(members || [])
+    // Compteur fiches en attente par membre
+    const pending: Record<string, number> = {}
+    if ((members || []).length > 0) {
+      const { data: fichesAttente } = await supabase.from('fiches_journalieres')
+        .select('agent_id, statut_validation')
+        .in('agent_id', (members || []).map(m => m.id))
+      ;(fichesAttente || []).forEach(f => {
+        if (!f.statut_validation || f.statut_validation === 'en_attente' || f.statut_validation === 'a_corriger') {
+          pending[f.agent_id] = (pending[f.agent_id] || 0) + 1
+        }
+      })
+    }
+    setMembersPending(pending)
 
 // Stats équipe ce mois
 const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
@@ -278,6 +298,19 @@ if (allMemberIds.length > 0) {
 
     setMemberFiches(prev => prev.map(f => f.id === ficheId
       ? { ...f, valide_chef: statut === 'validee', statut_validation: statut, commentaire_chef: commentaire || null } : f))
+
+    // Rafraîchir le compteur du membre
+    if (fiche) {
+      setMembersPending(prev => {
+        const updated = { ...prev }
+        if (statut === 'validee' || statut === 'rejetee') {
+          updated[fiche.agent_id] = Math.max(0, (updated[fiche.agent_id] || 0) - 1)
+        }
+        return updated
+      })
+    }
+    // Recharger les stats équipe
+    if (agent) loadEquipe(agent)
   }
 
   async function marquerNotifsLues() {
@@ -809,12 +842,19 @@ const totalCollecte = totalSmart
                         ))}
                       </div>
                       {fiche.commentaire_chef && (
-                        <div className="rounded-xl p-3 flex items-start gap-2"
+                        <div className="rounded-xl p-3 flex items-start gap-2 mb-3"
                           style={{ backgroundColor: fiche.statut_validation === 'validee' ? '#F0FDF4' : fiche.statut_validation === 'rejetee' ? '#FEF2F2' : '#FEF9C3' }}>
                           <span>💬</span>
                           <p className="text-xs" style={{ color: statutColor.color }}>{fiche.commentaire_chef}</p>
                         </div>
                       )}
+
+                      <button type="button"
+                        onClick={() => { setDetailFiche(fiche); setDetailCanValidate(false) }}
+                        className="w-full py-2 rounded-xl text-xs font-semibold"
+                        style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                        👁️ Voir tous les détails
+                      </button>
                     </div>
                   )
                 })}
@@ -863,7 +903,12 @@ const totalCollecte = totalSmart
                   return (
                     <div key={member.id}>
                       {/* Card membre */}
-                      <div className="rounded-2xl overflow-hidden" style={{ backgroundColor: card, border: `1px solid ${isSelected ? '#2A4E94' : border}`, boxShadow: isSelected ? '0 0 0 2px #2A4E94' : undefined }}>
+                      <div className="rounded-2xl overflow-hidden"
+                        style={{
+                          backgroundColor: card,
+                          border: `1px solid ${isSelected ? '#2A4E94' : (membersPending[member.id] || 0) > 0 ? '#FCD34D' : border}`,
+                          boxShadow: isSelected ? '0 0 0 2px #2A4E94' : (membersPending[member.id] || 0) > 0 ? '0 0 0 1px #FCD34D' : undefined
+                        }}>
                         <button type="button"
                           onClick={() => isSelected ? setSelectedMember(null) : selectMember(member)}
                           className="w-full p-4 flex items-center gap-3 text-left">
@@ -876,10 +921,17 @@ const totalCollecte = totalSmart
                             <div className="text-xs" style={{ color: sub }}>{member.telephone || '—'}</div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                              style={{ backgroundColor: member.statut === 'actif' ? '#DCFCE7' : '#FEE2E2', color: member.statut === 'actif' ? '#166534' : '#991B1B' }}>
-                              {member.statut === 'actif' ? '✅' : '❌'}
-                            </span>
+                            {(membersPending[member.id] || 0) > 0 ? (
+                              <span className="text-xs px-2 py-1 rounded-full font-bold"
+                                style={{ backgroundColor: '#FEF3C7', color: '#B45309', border: '1px solid #FCD34D' }}>
+                                🟠 {membersPending[member.id]} à valider
+                              </span>
+                            ) : (
+                              <span className="text-xs px-2 py-1 rounded-full font-medium"
+                                style={{ backgroundColor: '#DCFCE7', color: '#166534' }}>
+                                ✅ À jour
+                              </span>
+                            )}
                             <span className="text-sm" style={{ color: sub }}>{isSelected ? '▲' : '▼'}</span>
                           </div>
                         </button>
@@ -912,53 +964,59 @@ const totalCollecte = totalSmart
                                 </div>
 
                                 {/* Liste fiches */}
-                                <div className="space-y-2 overflow-y-auto" style={{ maxHeight: '300px' }}>
+
+                                <div className="space-y-2 overflow-y-auto" style={{ maxHeight: '400px' }}>
                                   {memberFiches.map(f => {
-                                    const manq = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
                                     const peutValider = !f.statut_validation || f.statut_validation === 'en_attente' || f.statut_validation === 'a_corriger'
+                                    const ec = getEcart(f)
+                                    const statutC = f.statut_validation === 'validee' ? { bg: '#DCFCE7', color: '#166534', label: '✅ Validée' }
+                                      : f.statut_validation === 'rejetee' ? { bg: '#FEE2E2', color: '#991B1B', label: '❌ Rejetée' }
+                                      : f.statut_validation === 'a_corriger' ? { bg: '#FEF9C3', color: '#854D0E', label: '🔄 À corriger' }
+                                      : { bg: '#FEF3C7', color: '#B45309', label: '⏳ En attente' }
                                     return (
                                       <div key={f.id} className="rounded-xl p-3 border"
-                                        style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc', borderColor: border }}>
+                                        style={{
+                                          backgroundColor: isDark ? '#0f172a' : '#f8fafc',
+                                          borderColor: peutValider ? '#FCD34D' : border
+                                        }}>
+                                        {/* En-tête */}
                                         <div className="flex items-start justify-between mb-2">
                                           <div>
-                                            <div className="text-xs font-medium" style={{ color: text }}>
-                                              {new Date(f.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}
+                                            <div className="text-sm font-semibold" style={{ color: text }}>
+                                              {new Date(f.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'long' })}
                                             </div>
-                                            <div className="text-xs" style={{ color: sub }}>
-                                              {f.comptes_ouverts} comptes · {(f.montant_mobilise || 0).toLocaleString()} F
+                                            <div className="text-xs mt-0.5" style={{ color: sub }}>
+                                              SMART {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
                                             </div>
                                           </div>
-                                          <div className="flex items-center gap-1">
+                                          <div className="flex flex-col items-end gap-1">
                                             <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                              style={{
-                                                backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' :
-                                                  f.statut_validation === 'rejetee' ? '#FEE2E2' :
-                                                  f.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF',
-                                                color: f.statut_validation === 'validee' ? '#166534' :
-                                                  f.statut_validation === 'rejetee' ? '#991B1B' :
-                                                  f.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94'
-                                              }}>
-                                              {f.statut_validation === 'validee' ? '✅' : f.statut_validation === 'rejetee' ? '❌' : f.statut_validation === 'a_corriger' ? '🔄' : '⏳'}
+                                              style={{ backgroundColor: statutC.bg, color: statutC.color }}>
+                                              {statutC.label}
                                             </span>
-                                            {manq > 0 && (
+                                            {ec !== 0 && (
                                               <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                                style={{ backgroundColor: f.manquant_regle ? '#DCFCE7' : '#FEE2E2', color: f.manquant_regle ? '#166534' : '#991B1B' }}>
-                                                ⚠️ {manq.toLocaleString()} F
+                                                style={{
+                                                  backgroundColor: f.manquant_regle ? '#DCFCE7' : ec > 0 ? '#FEE2E2' : '#E0E7FF',
+                                                  color: f.manquant_regle ? '#166534' : ec > 0 ? '#991B1B' : '#2A4E94'
+                                                }}>
+                                                {ec > 0 ? '⚠️' : '🔵'} {Math.abs(ec).toLocaleString()} F
                                               </span>
                                             )}
                                           </div>
                                         </div>
 
-                                        {/* Détails */}
+                                        {/* Mini stats */}
                                         <div className="grid grid-cols-4 gap-1 mb-2">
                                           {[
-                                            { label: 'Activés', value: f.comptes_actives },
-                                            { label: 'Dépôts', value: f.nb_depots },
-                                            { label: 'Prospects', value: f.prospects_visites },
-                                            { label: 'Clients', value: f.clients_suivis },
+                                            { label: 'DAT', value: f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0 },
+                                            { label: 'Adhés.', value: f.nb_adhesions || 0 },
+                                            { label: 'Réact.', value: f.reactivations?.length || 0 },
+                                            { label: 'Augm.', value: f.augmentations_mise?.length || 0 },
                                           ].map(k => (
-                                            <div key={k.label} className="text-center">
-                                              <div className="text-xs font-semibold" style={{ color: '#2A4E94' }}>{k.value}</div>
+                                            <div key={k.label} className="text-center p-1.5 rounded-lg"
+                                              style={{ backgroundColor: isDark ? '#1e293b' : 'white' }}>
+                                              <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{k.value}</div>
                                               <div style={{ fontSize: '10px', color: sub }}>{k.label}</div>
                                             </div>
                                           ))}
@@ -971,18 +1029,33 @@ const totalCollecte = totalSmart
                                           </div>
                                         )}
 
-                                        {peutValider && (
+                                        {/* Actions */}
+                                        <div className="flex gap-2">
                                           <button type="button"
-                                            onClick={() => { setValidationFiche(f); setValidationStatut('validee'); setValidationCommentaire(''); setShowValidationModal(true) }}
-                                            className="w-full py-1.5 rounded-lg text-xs font-semibold"
-                                            style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
-                                            ✅ Prendre une décision
+                                            onClick={() => { setDetailFiche(f); setDetailCanValidate(peutValider) }}
+                                            className="flex-1 py-2 rounded-lg text-xs font-semibold"
+                                            style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                                            👁️ Détails
                                           </button>
-                                        )}
+                                          {peutValider && (
+                                            <button type="button"
+                                              onClick={() => {
+                                                setValidationFiche(f)
+                                                setValidationStatut('validee')
+                                                setValidationCommentaire('')
+                                                setShowValidationModal(true)
+                                              }}
+                                              className="flex-1 py-2 rounded-lg text-xs font-semibold"
+                                              style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
+                                              ✅ Décider
+                                            </button>
+                                          )}
+                                        </div>
                                       </div>
                                     )
                                   })}
                                 </div>
+
                               </div>
                             )}
                           </div>
@@ -1422,6 +1495,24 @@ const totalCollecte = totalSmart
 
       {/* Padding bas */}
       <div className="h-20" />
+
+      {/* MODAL DÉTAIL FICHE */}
+      {detailFiche && (
+        <FicheDetailModal
+          fiche={detailFiche}
+          onClose={() => setDetailFiche(null)}
+          canValidate={detailCanValidate}
+          onValidate={() => {
+            setValidationFiche(detailFiche)
+            setValidationStatut('validee')
+            setValidationCommentaire('')
+            setDetailFiche(null)
+            setShowValidationModal(true)
+          }}
+        />
+      )}
+
+
 
       {/* MODAL VALIDATION FICHE */}
       {showValidationModal && validationFiche && (
