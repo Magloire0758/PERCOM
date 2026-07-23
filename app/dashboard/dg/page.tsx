@@ -17,8 +17,8 @@ export default function DashboardDG() {
   // Data
   const [stats, setStats] = useState({
     totalAgents: 0, totalAgences: 0,
-    collecteAujourdhui: 0, collecteMois: 0,
-    agentsEnAttente: 0, manquantsTotal: 0,
+    collecteAujourdhui: 0, collecteMois: 0, commissionsMois: 0,
+    agentsEnAttente: 0, manquantsTotal: 0, surplusTotal: 0, nbEcarts: 0,
     fichesNonValides: 0, tauxPerformance: 0,
   })
   const [topAgents, setTopAgents] = useState<any[]>([])
@@ -65,9 +65,13 @@ export default function DashboardDG() {
     titre: '', type_periodicite: 'mensuel', type_cible: 'agent',
     agent_id: '', equipe_id: '', agence_id: '', zone_id: '',
     date_debut: '', date_fin: '', statut_objectif: 'actif',
-    cible_comptes: 6, cible_comptes_actives: 4, cible_montant: 25000,
-    cible_depots: 5, cible_visites_prospects: 50, cible_clients_suivis: 25,
-    cible_assurances: 0, description: '',
+    cible_montant_smart: 0, cible_montant_caisse: 0, cible_commissions: 0,
+    cible_comptes_dat: 6, cible_adhesions: 5, cible_lyde_cash: 3,
+    cible_reactivations_nb: 3, cible_reactivations_montant: 0,
+    cible_augmentations_nb: 3, cible_augmentations_montant: 0,
+    cible_assurances_nb: 0, cible_assurances_montant: 0,
+    cible_depot_pe: 0, cible_depot_dat: 0, cible_depot_dav: 0,
+    description: '',
   })
 
   // Fiches
@@ -99,6 +103,7 @@ export default function DashboardDG() {
 
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
+  const getEcart = (f: any) => (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
 
   useEffect(() => {
     if (tab === 'agents') loadAgentsData()
@@ -136,19 +141,33 @@ export default function DashboardDG() {
     ] = await Promise.all([
       supabase.from('agents').select('*', { count: 'exact', head: true }).not('role', 'eq', 'admin'),
       supabase.from('agences').select('*', { count: 'exact', head: true }),
-      supabase.from('fiches_journalieres').select('montant_mobilise').eq('date', today),
-      supabase.from('fiches_journalieres').select('montant_mobilise, agent_id').gte('date', moisDebut),
+      supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise').eq('date', today),
+      supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise, commission_jour, agent_id').gte('date', moisDebut),
       supabase.from('agents').select('*', { count: 'exact', head: true }).eq('statut', 'en_attente'),
-      supabase.from('fiches_journalieres').select('montant_mobilise, montant_rapporte').eq('manquant_regle', false),
+      supabase.from('fiches_journalieres').select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte').eq('manquant_regle', false),
       supabase.from('fiches_journalieres').select('*', { count: 'exact', head: true }).eq('valide_chef', false),
     ])
-    const collecteAujourdhui = (fichesAujourdhui || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
-    const collecteMois = (fichesMois || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
-    const manquantsTotal = (manquantsData || []).reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
-    setStats({ totalAgents: totalAgents || 0, totalAgences: totalAgences || 0, collecteAujourdhui, collecteMois, agentsEnAttente: agentsEnAttente || 0, manquantsTotal, fichesNonValides: fichesNonValides || 0, tauxPerformance: 0 })
+    const collecteAujourdhui = (fichesAujourdhui || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
+    const collecteMois = (fichesMois || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
+    const commissionsMois = (fichesMois || []).reduce((s, f) => s + (f.commission_jour || 0), 0)
+
+    let manquantsTotal = 0, surplusTotal = 0, nbEcarts = 0
+    ;(manquantsData || []).forEach(f => {
+      const e = getEcart(f)
+      if (e > 0) { manquantsTotal += e; nbEcarts++ }
+      else if (e < 0) { surplusTotal += Math.abs(e); nbEcarts++ }
+    })
+
+    setStats({
+      totalAgents: totalAgents || 0, totalAgences: totalAgences || 0,
+      collecteAujourdhui, collecteMois, commissionsMois,
+      agentsEnAttente: agentsEnAttente || 0,
+      manquantsTotal, surplusTotal, nbEcarts,
+      fichesNonValides: fichesNonValides || 0, tauxPerformance: 0
+    })
 
     const agentCollecte: Record<string, number> = {}
-    ;(fichesMois || []).forEach(f => { agentCollecte[f.agent_id] = (agentCollecte[f.agent_id] || 0) + (f.montant_mobilise || 0) })
+    ;(fichesMois || []).forEach(f => { agentCollecte[f.agent_id] = (agentCollecte[f.agent_id] || 0) + (f.montant_smart ?? f.montant_mobilise ?? 0) })
     const topIds = Object.entries(agentCollecte).sort((a, b) => b[1] - a[1]).slice(0, 5)
     if (topIds.length > 0) {
       const { data: topData } = await supabase.from('agents').select('id, nom, prenom, agences(nom)').in('id', topIds.map(t => t[0]))
@@ -157,7 +176,7 @@ export default function DashboardDG() {
 
     const alertesList = []
     if ((agentsEnAttente || 0) > 0) alertesList.push({ type: 'warning', message: `${agentsEnAttente} compte(s) en attente`, action: 'agents' })
-    if (manquantsTotal > 0) alertesList.push({ type: 'error', message: `${manquantsTotal.toLocaleString()} FCFA de manquants`, action: 'manquants' })
+      if (nbEcarts > 0) alertesList.push({ type: 'error', message: `${nbEcarts} écart(s) — ${manquantsTotal.toLocaleString()} F manquant, ${surplusTotal.toLocaleString()} F surplus`, action: 'manquants' })
     if ((fichesNonValides || 0) > 0) alertesList.push({ type: 'info', message: `${fichesNonValides} fiche(s) non validée(s)`, action: 'fiches' })
     setAlertes(alertesList)
 
@@ -166,8 +185,8 @@ export default function DashboardDG() {
       const d = new Date(); d.setMonth(d.getMonth() - i)
       const debut = new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0]
       const fin = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0]
-      const { data: mData } = await supabase.from('fiches_journalieres').select('montant_mobilise').gte('date', debut).lte('date', fin)
-      const total = (mData || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+      const { data: mData } = await supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise').gte('date', debut).lte('date', fin)
+      const total = (mData || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
       evolution.push({ mois: d.toLocaleDateString('fr-FR', { month: 'short' }), total, pct: Math.min(100, Math.round(total / 1000000 * 100)) })
     }
     setEvolutionMensuelle(evolution)
@@ -188,8 +207,8 @@ export default function DashboardDG() {
       let collecteJour = 0
       if (agentIds.length > 0) {
         const { data: fichesJour } = await supabase.from('fiches_journalieres')
-          .select('montant_mobilise').eq('date', today).in('agent_id', agentIds)
-        collecteJour = (fichesJour || []).reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+          .select('montant_smart, montant_mobilise').eq('date', today).in('agent_id', agentIds)
+        collecteJour = (fichesJour || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
       }
       return { ...a, nbAgents: nbAgents || 0, nbZones: nbZones || 0, collecteJour }
     }))
@@ -257,10 +276,22 @@ export default function DashboardDG() {
       zone_id: objectifForm.zone_id || null,
       date_debut: objectifForm.date_debut || null, date_fin: objectifForm.date_fin || null,
       statut_objectif: objectifForm.statut_objectif,
-      cible_comptes: objectifForm.cible_comptes, cible_comptes_actives: objectifForm.cible_comptes_actives,
-      cible_montant: objectifForm.cible_montant, cible_depots: objectifForm.cible_depots,
-      cible_visites_prospects: objectifForm.cible_visites_prospects, cible_clients_suivis: objectifForm.cible_clients_suivis,
-      cible_assurances: objectifForm.cible_assurances, description: objectifForm.description,
+      cible_montant_smart: objectifForm.cible_montant_smart,
+      cible_montant_caisse: objectifForm.cible_montant_caisse,
+      cible_commissions: objectifForm.cible_commissions,
+      cible_comptes_dat: objectifForm.cible_comptes_dat,
+      cible_adhesions: objectifForm.cible_adhesions,
+      cible_lyde_cash: objectifForm.cible_lyde_cash,
+      cible_reactivations_nb: objectifForm.cible_reactivations_nb,
+      cible_reactivations_montant: objectifForm.cible_reactivations_montant,
+      cible_augmentations_nb: objectifForm.cible_augmentations_nb,
+      cible_augmentations_montant: objectifForm.cible_augmentations_montant,
+      cible_assurances_nb: objectifForm.cible_assurances_nb,
+      cible_assurances_montant: objectifForm.cible_assurances_montant,
+      cible_depot_pe: objectifForm.cible_depot_pe,
+      cible_depot_dat: objectifForm.cible_depot_dat,
+      cible_depot_dav: objectifForm.cible_depot_dav,
+      description: objectifForm.description,
       mois: new Date().getMonth() + 1, annee: new Date().getFullYear(),
     }
     if (editingObjectif) {
@@ -290,13 +321,51 @@ export default function DashboardDG() {
   }
 
   function resetObjectifForm() {
-    setObjectifForm({ titre: '', type_periodicite: 'mensuel', type_cible: 'agent', agent_id: '', equipe_id: '', agence_id: '', zone_id: '', date_debut: '', date_fin: '', statut_objectif: 'actif', cible_comptes: 6, cible_comptes_actives: 4, cible_montant: 25000, cible_depots: 5, cible_visites_prospects: 50, cible_clients_suivis: 25, cible_assurances: 0, description: '' })
+    setObjectifForm({
+      titre: '', type_periodicite: 'mensuel', type_cible: 'agent',
+      agent_id: '', equipe_id: '', agence_id: '', zone_id: '',
+      date_debut: '', date_fin: '', statut_objectif: 'actif',
+      cible_montant_smart: 0, cible_montant_caisse: 0, cible_commissions: 0,
+      cible_comptes_dat: 6, cible_adhesions: 5, cible_lyde_cash: 3,
+      cible_reactivations_nb: 3, cible_reactivations_montant: 0,
+      cible_augmentations_nb: 3, cible_augmentations_montant: 0,
+      cible_assurances_nb: 0, cible_assurances_montant: 0,
+      cible_depot_pe: 0, cible_depot_dat: 0, cible_depot_dav: 0,
+      description: '',
+    })
   }
 
   function openCreateObjectif() { setEditingObjectif(null); resetObjectifForm(); setShowObjectifModal(true) }
   function openEditObjectif(obj: any) {
     setEditingObjectif(obj)
-    setObjectifForm({ titre: obj.titre || '', type_periodicite: obj.type_periodicite || 'mensuel', type_cible: obj.type_cible || 'agent', agent_id: obj.agent_id || '', equipe_id: obj.equipe_id || '', agence_id: obj.agence_id || '', zone_id: obj.zone_id || '', date_debut: obj.date_debut || '', date_fin: obj.date_fin || '', statut_objectif: obj.statut_objectif || 'actif', cible_comptes: obj.cible_comptes || 6, cible_comptes_actives: obj.cible_comptes_actives || 4, cible_montant: obj.cible_montant || 25000, cible_depots: obj.cible_depots || 5, cible_visites_prospects: obj.cible_visites_prospects || 50, cible_clients_suivis: obj.cible_clients_suivis || 25, cible_assurances: obj.cible_assurances || 0, description: obj.description || '' })
+    setObjectifForm({
+      titre: obj.titre || '',
+      type_periodicite: obj.type_periodicite || 'mensuel',
+      type_cible: obj.type_cible || 'agent',
+      agent_id: obj.agent_id || '',
+      equipe_id: obj.equipe_id || '',
+      agence_id: obj.agence_id || '',
+      zone_id: obj.zone_id || '',
+      date_debut: obj.date_debut || '',
+      date_fin: obj.date_fin || '',
+      statut_objectif: obj.statut_objectif || 'actif',
+      cible_montant_smart: obj.cible_montant_smart || 0,
+      cible_montant_caisse: obj.cible_montant_caisse || 0,
+      cible_commissions: obj.cible_commissions || 0,
+      cible_comptes_dat: obj.cible_comptes_dat || 6,
+      cible_adhesions: obj.cible_adhesions || 5,
+      cible_lyde_cash: obj.cible_lyde_cash || 3,
+      cible_reactivations_nb: obj.cible_reactivations_nb || 3,
+      cible_reactivations_montant: obj.cible_reactivations_montant || 0,
+      cible_augmentations_nb: obj.cible_augmentations_nb || 3,
+      cible_augmentations_montant: obj.cible_augmentations_montant || 0,
+      cible_assurances_nb: obj.cible_assurances_nb || 0,
+      cible_assurances_montant: obj.cible_assurances_montant || 0,
+      cible_depot_pe: obj.cible_depot_pe || 0,
+      cible_depot_dat: obj.cible_depot_dat || 0,
+      cible_depot_dav: obj.cible_depot_dav || 0,
+      description: obj.description || '',
+    })
     setShowObjectifModal(true)
   }
 
@@ -324,10 +393,17 @@ export default function DashboardDG() {
       supabase.from('agents').select('*', { count: 'exact', head: true }).eq('statut', 'en_attente'),
     ])
     const liste: any[] = []
-    const manquantsReels = (manquantsData || []).filter(f => Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0)
-    manquantsReels.forEach(f => {
-      const montant = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
-      liste.push({ type: 'error', categorie: 'Manquant', message: `Manquant de ${montant.toLocaleString()} FCFA`, detail: `${f.agents?.prenom} ${f.agents?.nom} — ${f.agents?.agences?.nom || '—'} — ${new Date(f.date).toLocaleDateString('fr-FR')}`, date: f.date, action: 'manquants' })
+    const ecartsReels = (manquantsData || []).filter(f => getEcart(f) !== 0)
+    ecartsReels.forEach(f => {
+      const ec = getEcart(f)
+      const isM = ec > 0
+      liste.push({
+        type: isM ? 'error' : 'warning',
+        categorie: isM ? 'Manquant' : 'Surplus',
+        message: `${isM ? 'Manquant' : 'Surplus'} de ${Math.abs(ec).toLocaleString()} FCFA`,
+        detail: `${f.agents?.prenom} ${f.agents?.nom} — ${f.agents?.agences?.nom || '—'} — ${new Date(f.date).toLocaleDateString('fr-FR')}`,
+        date: f.date, action: 'manquants'
+      })
     })
     ;(fichesNonValidees || []).forEach(f => {
       liste.push({ type: 'warning', categorie: 'Validation', message: 'Fiche non validée', detail: `${f.agents?.prenom} ${f.agents?.nom} — ${f.agents?.agences?.nom || '—'} — ${new Date(f.date).toLocaleDateString('fr-FR')}`, date: f.date, action: 'fiches' })
@@ -342,7 +418,7 @@ export default function DashboardDG() {
     const { data } = await supabase.from('fiches_journalieres')
       .select('*, agents!inner(nom, prenom, agence_id, telephone, agences(nom))')
       .order('date', { ascending: false })
-    setManquants((data || []).filter(f => Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)) > 0))
+      setManquants((data || []).filter(f => getEcart(f) !== 0))
   }
 
   async function saveDgProfile(e: React.FormEvent) {
@@ -368,7 +444,7 @@ export default function DashboardDG() {
     { key: 'objectifs', label: 'Objectifs', icon: '🎯' },
     { key: 'fiches', label: 'Fiches', icon: '📋' },
     { key: 'alertes', label: 'Alertes', icon: '⚠️' },
-    { key: 'manquants', label: 'Manquants', icon: '🚨' },
+    { key: 'manquants', label: 'Écarts', icon: '⚖️' },
     { key: 'parametres', label: 'Paramètres', icon: '⚙️' },
   ]
 
@@ -437,7 +513,7 @@ export default function DashboardDG() {
               {tab === 'objectifs' && '🎯 Gestion des Objectifs'}
               {tab === 'fiches' && '📋 Vue des Fiches'}
               {tab === 'alertes' && '⚠️ Alertes & Anomalies'}
-              {tab === 'manquants' && '🚨 Vue des Manquants'}
+              {tab === 'manquants' && '⚖️ Vue des Écarts'}
               {tab === 'parametres' && '⚙️ Paramètres'}
             </h1>
             <p className="text-xs mt-0.5" style={{ color: '#818387' }}>
@@ -484,7 +560,7 @@ export default function DashboardDG() {
                   { label: 'Total agents', value: stats.totalAgents, icon: '👥', color: '#2A4E94', bg: '#EEF2FF', sub: 'Actifs sur la plateforme' },
                   { label: 'Total agences', value: stats.totalAgences, icon: '🏦', color: '#166534', bg: '#F0FDF4', sub: 'Réseau PADES' },
                   { label: "Collecté aujourd'hui", value: stats.collecteAujourdhui.toLocaleString() + ' F', icon: '💰', color: '#854D0E', bg: '#FEF9C3', sub: 'Toutes agences' },
-                  { label: 'Collecté ce mois', value: stats.collecteMois.toLocaleString() + ' F', icon: '📈', color: '#991B1B', bg: '#FEF2F2', sub: new Date().toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) },
+                  { label: 'Collecté ce mois (SMART)', value: stats.collecteMois.toLocaleString() + ' F', icon: '📈', color: '#991B1B', bg: '#FEF2F2', sub: `Commissions : ${stats.commissionsMois.toLocaleString()} F` },
                 ].map(s => (
                   <div key={s.label} className="bg-white rounded-2xl p-5 border border-gray-100">
                     <div className="flex items-start justify-between mb-3">
@@ -497,11 +573,12 @@ export default function DashboardDG() {
                 ))}
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-4 gap-4">
                 {[
                   { label: 'En attente activation', value: stats.agentsEnAttente, color: '#854D0E', bg: '#FEF9C3', icon: '⏳' },
-                  { label: 'Manquants non réglés', value: stats.manquantsTotal.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2', icon: '🚨' },
-                  { label: 'Fiches non validées', value: stats.fichesNonValides, color: '#2A4E94', bg: '#EEF2FF', icon: '📋' },
+                  { label: 'Manquants non réglés', value: stats.manquantsTotal.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2', icon: '⚠️' },
+                  { label: 'Surplus non réglés', value: stats.surplusTotal.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF', icon: '🔵' },
+                  { label: 'Fiches non validées', value: stats.fichesNonValides, color: '#854D0E', bg: '#FEF9C3', icon: '📋' },
                 ].map(s => (
                   <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0" style={{ backgroundColor: s.bg }}>{s.icon}</div>
@@ -851,7 +928,8 @@ export default function DashboardDG() {
                       ) : (
                         <div className="space-y-2 overflow-y-auto" style={{ maxHeight: '240px' }}>
                           {agentFiches.map(f => {
-                            const manq = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                            const ecart = getEcart(f)
+                            const isManquant = ecart > 0
                             return (
                               <div key={f.id} className="rounded-xl p-3 border" style={{ backgroundColor: '#f8fafc', borderColor: '#f1f5f9' }}>
                                 <div className="flex items-start justify-between mb-1">
@@ -863,15 +941,19 @@ export default function DashboardDG() {
                                       style={{ backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' : f.statut_validation === 'rejetee' ? '#FEE2E2' : '#FEF9C3', color: f.statut_validation === 'validee' ? '#166534' : f.statut_validation === 'rejetee' ? '#991B1B' : '#854D0E' }}>
                                       {f.statut_validation === 'validee' ? '✅' : f.statut_validation === 'rejetee' ? '❌' : '⏳'}
                                     </span>
-                                    {manq > 0 && (
-                                      <span className="text-xs px-2 py-0.5 rounded-full" style={{ backgroundColor: f.manquant_regle ? '#DCFCE7' : '#FEE2E2', color: f.manquant_regle ? '#166534' : '#991B1B' }}>
-                                        ⚠️ {manq.toLocaleString()} F
+                                    {ecart !== 0 && (
+                                      <span className="text-xs px-2 py-0.5 rounded-full"
+                                        style={{
+                                          backgroundColor: f.manquant_regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
+                                          color: f.manquant_regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
+                                        }}>
+                                        {isManquant ? '⚠️' : '🔵'} {Math.abs(ecart).toLocaleString()} F
                                       </span>
                                     )}
                                   </div>
                                 </div>
                                 <div className="text-xs" style={{ color: '#818387' }}>
-                                  {f.comptes_ouverts} comptes · {(f.montant_mobilise || 0).toLocaleString()} FCFA
+                                  {f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0} DAT · SMART {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
                                 </div>
                               </div>
                             )
@@ -1069,9 +1151,9 @@ export default function DashboardDG() {
                         </span>
                       </div>
                       <div className="grid grid-cols-2 gap-2 mb-4">
-                        {[
-                          { label: 'Comptes', value: obj.cible_comptes },
-                          { label: 'Montant', value: (obj.cible_montant || 0).toLocaleString() + ' F' },
+                      {[
+                          { label: 'SMART', value: (obj.cible_montant_smart || 0).toLocaleString() + ' F' },
+                          { label: 'Comptes DAT', value: obj.cible_comptes_dat || 0 },
                         ].map(k => (
                           <div key={k.label} className="rounded-lg p-2" style={{ backgroundColor: '#f8fafc' }}>
                             <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
@@ -1102,17 +1184,134 @@ export default function DashboardDG() {
           )}
 
           {/* ════ FICHES (lecture seule) ════ */}
-          {selectedFiche && (
-  <div className="w-1/2">
-    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-      <FicheDetail
-        fiche={selectedFiche}
-        onClose={() => setSelectedFiche(null)}
-        canValidate={false}
-      />
-    </div>
-  </div>
-)}
+          {tab === 'fiches' && (
+            <div className="flex gap-4">
+              <div className={`flex flex-col space-y-4 transition-all ${selectedFiche ? 'w-1/2' : 'w-full'}`}>
+                <div className="flex items-center justify-between">
+                  <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>Vue des fiches</h2>
+                  <div className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
+                    👁️ Lecture seule
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-4 gap-3">
+                  {[
+                    { label: 'Total', value: fiches.length, bg: '#EEF2FF', color: '#2A4E94' },
+                    { label: 'Validées', value: fiches.filter(f => f.statut_validation === 'validee').length, bg: '#F0FDF4', color: '#166534' },
+                    { label: 'Rejetées', value: fiches.filter(f => f.statut_validation === 'rejetee').length, bg: '#FEF2F2', color: '#991B1B' },
+                    { label: 'En attente', value: fiches.filter(f => !f.statut_validation || f.statut_validation === 'en_attente').length, bg: '#FEF9C3', color: '#854D0E' },
+                  ].map(s => (
+                    <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 text-center">
+                      <div className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</div>
+                      <div className="text-xs mt-1" style={{ color: '#818387' }}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3">
+                  <input type="text" placeholder="Rechercher par agent..."
+                    value={ficheSearch} onChange={e => setFicheSearch(e.target.value)}
+                    className="w-full px-4 py-2 rounded-xl border text-sm outline-none"
+                    style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+                  <div className="flex flex-wrap gap-2">
+                    <input type="date" value={ficheFilterDate} onChange={e => setFicheFilterDate(e.target.value)}
+                      className="px-3 py-2 rounded-xl border text-xs outline-none" style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+                    <select value={ficheFilterAgence} onChange={e => setFicheFilterAgence(e.target.value)}
+                      className="px-3 py-2 rounded-xl border text-xs outline-none" style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+                      <option value="tous">Toutes les agences</option>
+                      {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
+                    </select>
+                    <select value={ficheFilterStatut} onChange={e => setFicheFilterStatut(e.target.value)}
+                      className="px-3 py-2 rounded-xl border text-xs outline-none" style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+                      <option value="tous">Tous les statuts</option>
+                      <option value="validee">✅ Validée</option>
+                      <option value="rejetee">❌ Rejetée</option>
+                      <option value="a_corriger">🔄 À corriger</option>
+                      <option value="en_attente">⏳ En attente</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                  <div className="overflow-y-auto" style={{ maxHeight: '55vh' }}>
+                    <table className="w-full">
+                      <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
+                        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                          {['Date', 'Agent', 'Agence', 'SMART', 'Écart', 'Statut'].map(h => (
+                            <th key={h} className="text-left px-3 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {fiches.filter(f => {
+                          const ms = ficheSearch === '' || `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(ficheSearch.toLowerCase())
+                          const ma = ficheFilterAgence === 'tous' || f.agents?.agence_id === ficheFilterAgence
+                          const mst = ficheFilterStatut === 'tous' || f.statut_validation === ficheFilterStatut
+                          const md = ficheFilterDate === '' || f.date === ficheFilterDate
+                          return ms && ma && mst && md
+                        }).map((f, i, arr) => {
+                          const ecart = getEcart(f)
+                          const isManquant = ecart > 0
+                          return (
+                            <tr key={f.id} onClick={() => setSelectedFiche(f)}
+                              className="cursor-pointer hover:bg-gray-50 transition-colors"
+                              style={{ borderBottom: i < arr.length - 1 ? '1px solid #f8fafc' : 'none', backgroundColor: selectedFiche?.id === f.id ? '#EEF2FF' : undefined }}>
+                              <td className="px-3 py-3">
+                                <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                                  {new Date(f.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                                </div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0" style={{ backgroundColor: '#2A4E94' }}>
+                                    {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
+                                  </div>
+                                  <span className="text-xs font-medium" style={{ color: '#1a1a2e' }}>{f.agents?.prenom} {f.agents?.nom}</span>
+                                </div>
+                              </td>
+                              <td className="px-3 py-3 text-xs" style={{ color: '#818387' }}>{f.agents?.agences?.nom || '—'}</td>
+                              <td className="px-3 py-3">
+                                <span className="text-xs font-semibold" style={{ color: '#166534' }}>{(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F</span>
+                              </td>
+                              <td className="px-3 py-3">
+                                {ecart !== 0 ? (
+                                  <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                                    style={{
+                                      backgroundColor: f.manquant_regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
+                                      color: f.manquant_regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
+                                    }}>
+                                    {f.manquant_regle ? '✅' : isManquant ? '⚠️' : '🔵'} {Math.abs(ecart).toLocaleString()} F
+                                  </span>
+                                ) : <span className="text-xs" style={{ color: '#818387' }}>—</span>}
+                              </td>
+                              <td className="px-3 py-3">
+                                <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                                  style={{ backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' : f.statut_validation === 'rejetee' ? '#FEE2E2' : f.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF', color: f.statut_validation === 'validee' ? '#166534' : f.statut_validation === 'rejetee' ? '#991B1B' : f.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94' }}>
+                                  {f.statut_validation === 'validee' ? '✅ Validée' : f.statut_validation === 'rejetee' ? '❌ Rejetée' : f.statut_validation === 'a_corriger' ? '🔄 À corriger' : '⏳ En attente'}
+                                </span>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              {selectedFiche && (
+                <div className="w-1/2">
+                  <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                    <FicheDetail
+                      fiche={selectedFiche}
+                      onClose={() => setSelectedFiche(null)}
+                      canValidate={false}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* ════ ALERTES ════ */}
           {tab === 'alertes' && (
@@ -1178,21 +1377,21 @@ export default function DashboardDG() {
             <div className="flex gap-4">
               <div className={`flex flex-col space-y-4 transition-all ${selectedManquant ? 'w-1/2' : 'w-full'}`}>
                 <div className="flex items-center justify-between">
-                  <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>Vue des manquants</h2>
+                <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>Vue des écarts</h2>
                   <div className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
                     👁️ Lecture seule
                   </div>
                 </div>
 
                 {(() => {
-                  const total = manquants.reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
                   const nonRegle = manquants.filter(f => !f.manquant_regle)
-                  const totalNonRegle = nonRegle.reduce((s, f) => s + Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0)), 0)
+                  const totalManq = nonRegle.filter(f => getEcart(f) > 0).reduce((s, f) => s + getEcart(f), 0)
+                  const totalSurp = Math.abs(nonRegle.filter(f => getEcart(f) < 0).reduce((s, f) => s + getEcart(f), 0))
                   return (
                     <div className="grid grid-cols-3 gap-3">
                       {[
-                        { label: 'Total manquants', value: total.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
-                        { label: 'Non réglés', value: totalNonRegle.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
+                        { label: 'Manquants non réglés', value: totalManq.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
+                        { label: 'Surplus non réglés', value: totalSurp.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
                         { label: 'Fiches concernées', value: manquants.length, color: '#854D0E', bg: '#FEF9C3' },
                       ].map(s => (
                         <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 text-center">
@@ -1216,8 +1415,10 @@ export default function DashboardDG() {
                   </select>
                   <select value={manquantFilterStatut} onChange={e => setManquantFilterStatut(e.target.value)}
                     className="px-3 py-2 rounded-xl border text-xs outline-none" style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-                    <option value="tous">Tous</option>
-                    <option value="non_regle">⚠️ Non réglés</option>
+                    <option value="tous">Tous les écarts</option>
+                    <option value="non_regle">⏳ Non réglés</option>
+                    <option value="manquant">⚠️ Manquants</option>
+                    <option value="surplus">🔵 Surplus</option>
                     <option value="regle">✅ Réglés</option>
                   </select>
                 </div>
@@ -1227,20 +1428,26 @@ export default function DashboardDG() {
                     <table className="w-full">
                       <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
                         <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                          {['Date', 'Agent', 'Agence', 'Collecté', 'Rapporté', 'Manquant', 'Statut'].map(h => (
+                        {['Date', 'Agent', 'Agence', 'SMART', 'Caisse', 'Écart', 'Type'].map(h => (
                             <th key={h} className="text-left px-3 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {manquants.filter(f => {
-                          const montant = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                          const ec = getEcart(f)
                           const ms = manquantSearch === '' || `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(manquantSearch.toLowerCase())
                           const ma = manquantFilterAgence === 'tous' || f.agents?.agence_id === manquantFilterAgence
-                          const mst = manquantFilterStatut === 'tous' || (manquantFilterStatut === 'regle' ? f.manquant_regle : !f.manquant_regle)
-                          return ms && ma && mst && montant > 0
+                          const mst = manquantFilterStatut === 'tous'
+                            || (manquantFilterStatut === 'regle' && f.manquant_regle)
+                            || (manquantFilterStatut === 'non_regle' && !f.manquant_regle)
+                            || (manquantFilterStatut === 'manquant' && ec > 0 && !f.manquant_regle)
+                            || (manquantFilterStatut === 'surplus' && ec < 0 && !f.manquant_regle)
+                          return ms && ma && mst && ec !== 0
                         }).map((f, i, arr) => {
-                          const montant = Math.max(0, (f.montant_mobilise || 0) - (f.montant_rapporte || 0))
+                          const ecart = getEcart(f)
+                          const isManquant = ecart > 0
+                          const montant = Math.abs(ecart)
                           return (
                             <tr key={f.id} onClick={() => setSelectedManquant(f)}
                               className="cursor-pointer hover:bg-gray-50 transition-colors"
@@ -1250,7 +1457,8 @@ export default function DashboardDG() {
                               </td>
                               <td className="px-3 py-3">
                                 <div className="flex items-center gap-2">
-                                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ backgroundColor: '#E4322C' }}>
+                                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
+                                    style={{ backgroundColor: isManquant ? '#E4322C' : '#2A4E94' }}>
                                     {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
                                   </div>
                                   <div>
@@ -1260,13 +1468,23 @@ export default function DashboardDG() {
                                 </div>
                               </td>
                               <td className="px-3 py-3 text-xs" style={{ color: '#818387' }}>{f.agents?.agences?.nom || '—'}</td>
-                              <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#166534' }}>{(f.montant_mobilise || 0).toLocaleString()} F</td>
-                              <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#2A4E94' }}>{(f.montant_rapporte || 0).toLocaleString()} F</td>
-                              <td className="px-3 py-3 text-sm font-bold" style={{ color: '#E4322C' }}>{montant.toLocaleString()} F</td>
+                              <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#166534' }}>
+                                {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
+                              </td>
+                              <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#2A4E94' }}>
+                                {(f.montant_caisse ?? f.montant_rapporte ?? 0).toLocaleString()} F
+                              </td>
+                              <td className="px-3 py-3 text-sm font-bold"
+                                style={{ color: f.manquant_regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
+                                {isManquant ? '−' : '+'} {montant.toLocaleString()} F
+                              </td>
                               <td className="px-3 py-3">
                                 <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                  style={{ backgroundColor: f.manquant_regle ? '#DCFCE7' : '#FEE2E2', color: f.manquant_regle ? '#166534' : '#991B1B' }}>
-                                  {f.manquant_regle ? '✅ Réglé' : '⚠️ En attente'}
+                                  style={{
+                                    backgroundColor: f.manquant_regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
+                                    color: f.manquant_regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
+                                  }}>
+                                  {f.manquant_regle ? '✅ Réglé' : isManquant ? '⚠️ Manquant' : '🔵 Surplus'}
                                 </span>
                               </td>
                             </tr>
@@ -1284,7 +1502,7 @@ export default function DashboardDG() {
                     <div className="p-5 border-b flex items-start justify-between" style={{ borderColor: '#f1f5f9' }}>
                       <div>
                         <div className="font-bold text-base" style={{ color: '#1a1a2e' }}>
-                          Manquant — {new Date(selectedManquant.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
+                        {getEcart(selectedManquant) > 0 ? '⚠️ Manquant' : '🔵 Surplus'} — {new Date(selectedManquant.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
                         </div>
                         <div className="text-sm mt-0.5" style={{ color: '#818387' }}>
                           {selectedManquant.agents?.prenom} {selectedManquant.agents?.nom} · {selectedManquant.agents?.agences?.nom}
@@ -1293,26 +1511,32 @@ export default function DashboardDG() {
                       <button type="button" onClick={() => setSelectedManquant(null)} className="p-1.5 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
                     </div>
                     <div className="p-5">
-                      {(() => {
-                        const montant = Math.max(0, (selectedManquant.montant_mobilise || 0) - (selectedManquant.montant_rapporte || 0))
+                    {(() => {
+                        const ec = getEcart(selectedManquant)
+                        const isM = ec > 0
+                        const regle = selectedManquant.manquant_regle
                         return (
                           <div className="rounded-2xl p-5 text-center mb-4"
-                            style={{ backgroundColor: selectedManquant.manquant_regle ? '#F0FDF4' : '#FEF2F2', border: `1px solid ${selectedManquant.manquant_regle ? '#BBF7D0' : '#FECACA'}` }}>
-                            <div className="text-3xl font-bold mb-1" style={{ color: selectedManquant.manquant_regle ? '#166534' : '#E4322C' }}>
-                              {montant.toLocaleString()} FCFA
+                            style={{
+                              backgroundColor: regle ? '#F0FDF4' : isM ? '#FEF2F2' : '#EEF2FF',
+                              border: `1px solid ${regle ? '#BBF7D0' : isM ? '#FECACA' : '#C7D2FE'}`
+                            }}>
+                            <div className="text-3xl font-bold mb-1"
+                              style={{ color: regle ? '#166534' : isM ? '#E4322C' : '#2A4E94' }}>
+                              {isM ? '−' : '+'} {Math.abs(ec).toLocaleString()} FCFA
                             </div>
-                            <div className="text-sm" style={{ color: selectedManquant.manquant_regle ? '#166534' : '#991B1B' }}>
-                              {selectedManquant.manquant_regle ? '✅ Manquant réglé' : '⚠️ Non réglé'}
+                            <div className="text-sm" style={{ color: regle ? '#166534' : isM ? '#991B1B' : '#2A4E94' }}>
+                              {regle ? '✅ Écart réglé' : isM ? '⚠️ Manquant non réglé' : '🔵 Surplus non régularisé'}
                             </div>
                           </div>
                         )
                       })()}
                       <div className="grid grid-cols-2 gap-2">
                         {[
-                          { label: 'Collecté', value: (selectedManquant.montant_mobilise || 0).toLocaleString() + ' F' },
-                          { label: 'Rapporté', value: (selectedManquant.montant_rapporte || 0).toLocaleString() + ' F' },
+                          { label: 'SMART (théorique)', value: (selectedManquant.montant_smart ?? selectedManquant.montant_mobilise ?? 0).toLocaleString() + ' F' },
+                          { label: 'Caisse (rapporté)', value: (selectedManquant.montant_caisse ?? selectedManquant.montant_rapporte ?? 0).toLocaleString() + ' F' },
+                          { label: 'Commission', value: (selectedManquant.commission_jour || 0).toLocaleString() + ' F' },
                           { label: 'Téléphone', value: selectedManquant.agents?.telephone || '—' },
-                          { label: 'Date', value: new Date(selectedManquant.date).toLocaleDateString('fr-FR') },
                         ].map(k => (
                           <div key={k.label} className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
                             <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
@@ -1492,26 +1716,104 @@ export default function DashboardDG() {
                   </select>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                {[
-                  { key: 'cible_comptes', label: 'Comptes à ouvrir' },
-                  { key: 'cible_comptes_actives', label: 'Comptes à activer' },
-                  { key: 'cible_depots', label: 'Dépôts' },
-                  { key: 'cible_visites_prospects', label: 'Prospects' },
-                ].map(field => (
-                  <div key={field.key}>
-                    <label className="block text-xs font-medium mb-1.5" style={{ color: '#818387' }}>{field.label}</label>
-                    <input type="number" min="0" value={(objectifForm as any)[field.key]}
-                      onChange={e => setObjectifForm(p => ({ ...p, [field.key]: parseInt(e.target.value) || 0 }))}
-                      className="w-full px-4 py-3 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} />
+              {/* KPIs cibles */}
+              <div className="space-y-4">
+
+                {/* 💰 Montants */}
+                <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+                  <div className="text-xs font-bold mb-3" style={{ color: '#166534' }}>💰 Montants collectés (FCFA)</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { key: 'cible_montant_smart', label: 'Montant SMART' },
+                      { key: 'cible_montant_caisse', label: 'Montant Caisse' },
+                      { key: 'cible_commissions', label: 'Commissions' },
+                    ].map(field => (
+                      <div key={field.key}>
+                        <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+                        <input type="number" min="0" value={(objectifForm as any)[field.key]}
+                          onChange={e => setObjectifForm(p => ({ ...p, [field.key]: parseFloat(e.target.value) || 0 }))}
+                          className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <div>
-                <label className="block text-xs font-medium mb-1.5" style={{ color: '#818387' }}>Montant cible (FCFA)</label>
-                <input type="number" min="0" value={objectifForm.cible_montant}
-                  onChange={e => setObjectifForm(p => ({ ...p, cible_montant: parseFloat(e.target.value) || 0 }))}
-                  className="w-full px-4 py-3 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} />
+                </div>
+
+                {/* 🏦 Comptes & Adhésions */}
+                <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+                  <div className="text-xs font-bold mb-3" style={{ color: '#2A4E94' }}>🏦 Comptes & Adhésions</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { key: 'cible_comptes_dat', label: 'Comptes DAT' },
+                      { key: 'cible_adhesions', label: 'Adhésions' },
+                      { key: 'cible_lyde_cash', label: 'Lydé Cash' },
+                    ].map(field => (
+                      <div key={field.key}>
+                        <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+                        <input type="number" min="0" value={(objectifForm as any)[field.key]}
+                          onChange={e => setObjectifForm(p => ({ ...p, [field.key]: parseInt(e.target.value) || 0 }))}
+                          className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 🔄 Réactivations & Augmentations */}
+                <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+                  <div className="text-xs font-bold mb-3" style={{ color: '#854D0E' }}>🔄 Réactivations & Augmentations</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { key: 'cible_reactivations_nb', label: 'Réactiv. (nb)', type: 'int' },
+                      { key: 'cible_reactivations_montant', label: 'Réactiv. (montant F)', type: 'float' },
+                      { key: 'cible_augmentations_nb', label: 'Augment. (nb)', type: 'int' },
+                      { key: 'cible_augmentations_montant', label: 'Augment. (montant F)', type: 'float' },
+                    ].map(field => (
+                      <div key={field.key}>
+                        <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+                        <input type="number" min="0" value={(objectifForm as any)[field.key]}
+                          onChange={e => setObjectifForm(p => ({ ...p, [field.key]: (field.type === 'int' ? parseInt(e.target.value) : parseFloat(e.target.value)) || 0 }))}
+                          className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 🛡️ Assurances */}
+                <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+                  <div className="text-xs font-bold mb-3" style={{ color: '#166534' }}>🛡️ Assurances</div>
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { key: 'cible_assurances_nb', label: 'Nombre de contrats', type: 'int' },
+                      { key: 'cible_assurances_montant', label: 'Montant (F)', type: 'float' },
+                    ].map(field => (
+                      <div key={field.key}>
+                        <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+                        <input type="number" min="0" value={(objectifForm as any)[field.key]}
+                          onChange={e => setObjectifForm(p => ({ ...p, [field.key]: (field.type === 'int' ? parseInt(e.target.value) : parseFloat(e.target.value)) || 0 }))}
+                          className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 🏧 Autres dépôts */}
+                <div className="rounded-2xl border p-4" style={{ borderColor: '#e2e8f0' }}>
+                  <div className="text-xs font-bold mb-3" style={{ color: '#2A4E94' }}>🏧 Autres dépôts (FCFA)</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { key: 'cible_depot_pe', label: 'PE' },
+                      { key: 'cible_depot_dat', label: 'DAT' },
+                      { key: 'cible_depot_dav', label: 'DAV' },
+                    ].map(field => (
+                      <div key={field.key}>
+                        <label className="block text-xs font-medium mb-1" style={{ color: '#818387' }}>{field.label}</label>
+                        <input type="number" min="0" value={(objectifForm as any)[field.key]}
+                          onChange={e => setObjectifForm(p => ({ ...p, [field.key]: parseFloat(e.target.value) || 0 }))}
+                          className="w-full px-3 py-2.5 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} placeholder="0" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
               </div>
               <div className="flex gap-3">
                 <button type="button" onClick={() => { setShowObjectifModal(false); setEditingObjectif(null) }}
