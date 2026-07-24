@@ -4,7 +4,9 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import FicheDetail from '@/components/FicheDetail' 
-import FicheDetailModal from '@/components/FicheDetailModal' 
+import FicheDetailModal from '@/components/FicheDetailModal'
+import RegularisationModal from '@/components/RegularisationModal'   // ← AJOUTER
+import EcartHistorique from '@/components/EcartHistorique'           // ← AJOUTER 
 
 type Tab = 'dashboard' | 'agents' | 'equipes' | 'objectifs' | 'fiches' | 'alertes' | 'manquants' | 'parametres'
 
@@ -85,6 +87,8 @@ export default function DashboardResponsable() {
   // Filtre rôle + modal détail
   const [ficheFilterRole, setFicheFilterRole] = useState('tous')
   const [detailFiche, setDetailFiche] = useState<any>(null)
+  const [showRegulModal, setShowRegulModal] = useState(false)
+  const [regulFiche, setRegulFiche] = useState<any>(null)
 
   // Paramètres
   const [respForm, setRespForm] = useState({ nom: '', prenom: '', telephone: '' })
@@ -96,6 +100,11 @@ export default function DashboardResponsable() {
   const getEcart = (f: any) => {
     if (!f) return 0
     return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+  }
+
+  const getRestant = (f: any) => {
+    if (!f) return 0
+    return Math.abs(getEcart(f)) - (f.montant_regularise || 0)
   }
 
   useEffect(() => {
@@ -145,7 +154,7 @@ export default function DashboardResponsable() {
       agentIds.length > 0 ? supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise').eq('date', today).in('agent_id', agentIds) : { data: [] },
       agentIds.length > 0 ? supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise, commission_jour, agent_id').gte('date', moisDebut).in('agent_id', agentIds) : { data: [] },
       supabase.from('agents').select('*', { count: 'exact', head: true }).eq('agence_id', r.agence_id).eq('statut', 'en_attente'),
-      agentIds.length > 0 ? supabase.from('fiches_journalieres').select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte').eq('manquant_regle', false).in('agent_id', agentIds) : { data: [] },
+      agentIds.length > 0 ? supabase.from('fiches_journalieres').select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte, montant_regularise').eq('manquant_regle', false).in('agent_id', agentIds) : { data: [] },
       agentIds.length > 0 ? supabase.from('fiches_journalieres').select('*', { count: 'exact', head: true }).eq('valide_chef', false).in('agent_id', agentIds) : { count: 0 },
     ])
 
@@ -156,8 +165,10 @@ export default function DashboardResponsable() {
     let manquantsTotal = 0, surplusTotal = 0, nbEcarts = 0
     ;(manquantsData || []).forEach(f => {
       const e = getEcart(f)
-      if (e > 0) { manquantsTotal += e; nbEcarts++ }
-      else if (e < 0) { surplusTotal += Math.abs(e); nbEcarts++ }
+      const restant = Math.abs(e) - (f.montant_regularise || 0)
+      if (restant <= 0) return
+      if (e > 0) { manquantsTotal += restant; nbEcarts++ }
+      else if (e < 0) { surplusTotal += restant; nbEcarts++ }
     })
 
     setStats({
@@ -1315,18 +1326,20 @@ export default function DashboardResponsable() {
               <div className={`flex flex-col space-y-4 transition-all ${selectedManquant ? 'w-1/2' : 'w-full'}`}>
                 <div className="flex items-center justify-between">
                 <h2 className="font-bold text-base" style={{ color: '#1a1a2e' }}>Écarts — {responsable?.agences?.nom}</h2>
-                  <div className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>👁️ Lecture seule</div>
+                <div className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>✅ Peut régulariser</div>
                 </div>
 
                 {(() => {
                   const nonRegle = manquants.filter(f => !f.manquant_regle)
-                  const totalManq = nonRegle.filter(f => getEcart(f) > 0).reduce((s, f) => s + getEcart(f), 0)
-                  const totalSurp = Math.abs(nonRegle.filter(f => getEcart(f) < 0).reduce((s, f) => s + getEcart(f), 0))
+                  const totalManq = nonRegle.filter(f => getEcart(f) > 0).reduce((s, f) => s + getRestant(f), 0)
+                  const totalSurp = nonRegle.filter(f => getEcart(f) < 0).reduce((s, f) => s + getRestant(f), 0)
+                  const totalRegularise = manquants.reduce((s, f) => s + (f.montant_regularise || 0), 0)
                   return (
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-4 gap-3">
                       {[
-                        { label: 'Manquants non réglés', value: totalManq.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
-                        { label: 'Surplus non réglés', value: totalSurp.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
+                        { label: 'Manquants restants', value: totalManq.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
+                        { label: 'Surplus restants', value: totalSurp.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
+                        { label: 'Total régularisé', value: totalRegularise.toLocaleString() + ' F', color: '#166534', bg: '#F0FDF4' },
                         { label: 'Fiches concernées', value: manquants.length, color: '#854D0E', bg: '#FEF9C3' },
                       ].map(s => (
                         <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 text-center">
@@ -1358,7 +1371,7 @@ export default function DashboardResponsable() {
                     <table className="w-full">
                       <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
                         <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        {['Date', 'Agent', 'SMART', 'Caisse', 'Écart', 'Type'].map(h => (
+                        {['Date', 'Agent', 'Écart', 'Régularisé', 'Restant', 'Type', 'Actions'].map(h => (
                             <th key={h} className="text-left px-3 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
                           ))}
                         </tr>
@@ -1395,11 +1408,16 @@ export default function DashboardResponsable() {
                                   </div>
                                 </div>
                               </td>
-                              <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#166534' }}>{(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F</td>
-                              <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#2A4E94' }}>{(f.montant_caisse ?? f.montant_rapporte ?? 0).toLocaleString()} F</td>
+                              <td className="px-3 py-3 text-xs font-semibold"
+                                style={{ color: isManquant ? '#991B1B' : '#2A4E94' }}>
+                                {montant.toLocaleString()} F
+                              </td>
+                              <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#166534' }}>
+                                {(f.montant_regularise || 0).toLocaleString()} F
+                              </td>
                               <td className="px-3 py-3 text-sm font-bold"
-                                style={{ color: f.manquant_regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
-                                {isManquant ? '−' : '+'} {montant.toLocaleString()} F
+                                style={{ color: getRestant(f) <= 0 ? '#166534' : '#854D0E' }}>
+                                {Math.max(0, getRestant(f)).toLocaleString()} F
                               </td>
                               <td className="px-3 py-3">
                                 <span className="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -1410,6 +1428,17 @@ export default function DashboardResponsable() {
                                   {f.manquant_regle ? '✅ Réglé' : isManquant ? '⚠️ Manquant' : '🔵 Surplus'}
                                 </span>
                               </td>
+                              <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                                {!f.manquant_regle && getRestant(f) > 0 && (
+                                  <button type="button"
+                                    onClick={() => { setRegulFiche(f); setShowRegulModal(true) }}
+                                    className="px-2 py-1.5 rounded-lg text-xs font-semibold text-white"
+                                    style={{ backgroundColor: '#2A4E94' }}>
+                                    💰 Régulariser
+                                  </button>
+                                )}
+                              </td>
+                             
                             </tr>
                           )
                         })}
@@ -1471,8 +1500,33 @@ export default function DashboardResponsable() {
                                 </div>
                               ))}
                             </div>
-                            <div className="mt-4 p-3 rounded-xl text-xs" style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-                              ℹ️ Le règlement définitif est confirmé par l&apos;administrateur
+                            {/* Historique régularisations */}
+                            <div className="mt-4 pt-4 border-t" style={{ borderColor: '#f1f5f9' }}>
+                              <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>
+                                💰 RÉGULARISATIONS
+                              </h4>
+                              <EcartHistorique
+                                ficheId={selectedManquant.id}
+                                ecartTotal={Math.abs(ec)}
+                                montantRegularise={selectedManquant.montant_regularise || 0}
+                                isManquant={isM}
+                              />
+                            </div>
+
+                            {/* Action */}
+                            <div className="mt-4">
+                              {getRestant(selectedManquant) > 0 ? (
+                                <button type="button"
+                                  onClick={() => { setRegulFiche(selectedManquant); setShowRegulModal(true) }}
+                                  className="w-full py-3 rounded-xl text-white text-sm font-semibold"
+                                  style={{ backgroundColor: '#2A4E94' }}>
+                                  💰 Enregistrer une régularisation
+                                </button>
+                              ) : (
+                                <div className="text-center text-sm font-medium py-2" style={{ color: '#166534' }}>
+                                  ✅ Écart entièrement régularisé
+                                </div>
+                              )}
                             </div>
                           </>
                         )
@@ -1563,6 +1617,21 @@ export default function DashboardResponsable() {
 
         </div>
       </div>
+
+      {/* MODAL RÉGULARISATION */}
+      {showRegulModal && regulFiche && (
+        <RegularisationModal
+          fiche={regulFiche}
+          onClose={() => { setShowRegulModal(false); setRegulFiche(null) }}
+          onSuccess={() => {
+            loadManquants()
+            loadFiches()
+            loadStats()
+            loadAlertes()
+            setSelectedManquant(null)
+          }}
+        />
+      )}
 
       {/* MODAL DÉTAIL FICHE */}
       {detailFiche && (
