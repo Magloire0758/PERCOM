@@ -999,9 +999,8 @@ useEffect(() => {
     loadStats()
   }
 
-  async function loadFiches(resp?: any) {
-    // Pour admin et DG (sans filtre agence) :
-    const { data } = await supabase
+  async function loadFiches() {
+    const { data, error } = await supabase
       .from('fiches_journalieres')
       .select(`
         *,
@@ -1012,7 +1011,10 @@ useEffect(() => {
       `)
       .order('date', { ascending: false })
       .limit(100)
-      setFiches((data || []).filter(Boolean))
+
+    if (error) { console.error('ADMIN loadFiches:', error.message, error.hint); setFiches([]); return }
+    console.log('ADMIN fiches chargées:', data?.length)
+    setFiches((data || []).filter(Boolean))
   }
   
   async function validerFicheAdmin(ficheId: string, statut: string, commentaire?: string) {
