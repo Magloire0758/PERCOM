@@ -2352,7 +2352,7 @@ useEffect(() => {
           <table className="w-full">
             <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
               <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                {['Date', 'Agent', 'Agence', 'Collecté', 'Rapporté', 'Manquant', 'Statut', 'Actions'].map(h => (
+              {['Date', 'Agent', 'Agence', 'SMART', 'Caisse', 'Écart', 'Statut', 'Actions'].map(h => (
                   <th key={h} className="text-left px-3 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
                 ))}
               </tr>
@@ -3227,314 +3227,259 @@ useEffect(() => {
   </div>
 )}
 
-{/* ════ MANQUANTS ════ */}
+{/* ════ ÉCARTS ════ */}
 {tab === 'manquants' && (
-  <div className="flex gap-4">
+        <div className="flex gap-4">
+          <div className={`flex flex-col space-y-4 transition-all ${selectedManquant ? 'w-1/2' : 'w-full'}`}>
 
-    {/* Liste */}
-    <div className={`flex flex-col space-y-4 transition-all ${selectedManquant ? 'w-1/2' : 'w-full'}`}>
-
-      {/* Stats globales */}
-      {(() => {
-        const nonRegle = manquants.filter(f => !f.manquant_regle)
-        const totalManq = nonRegle.filter(f => getEcart(f) > 0).reduce((s, f) => s + getEcart(f), 0)
-        const totalSurp = Math.abs(nonRegle.filter(f => getEcart(f) < 0).reduce((s, f) => s + getEcart(f), 0))
-        const nbRegle = manquants.filter(f => f.manquant_regle).length
-
-        return (
-          <div className="grid grid-cols-4 gap-3">
-            {[
-              { label: 'Manquants non réglés', value: totalManq.toLocaleString() + ' F', bg: '#FEF2F2', color: '#991B1B', icon: '⚠️' },
-              { label: 'Surplus non réglés', value: totalSurp.toLocaleString() + ' F', bg: '#EEF2FF', color: '#2A4E94', icon: '🔵' },
-              { label: 'Écarts réglés', value: nbRegle, bg: '#F0FDF4', color: '#166534', icon: '✅' },
-              { label: 'Fiches concernées', value: manquants.length, bg: '#FEF9C3', color: '#854D0E', icon: '📋' },
-            ].map(s => (
-              <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xl">{s.icon}</span>
-                  <span className="text-xs" style={{ color: '#818387' }}>{s.label}</span>
+            {(() => {
+              const nonRegle = manquants.filter(f => !f.manquant_regle)
+              const totalManq = nonRegle.filter(f => getEcart(f) > 0).reduce((s, f) => s + getEcart(f), 0)
+              const totalSurp = Math.abs(nonRegle.filter(f => getEcart(f) < 0).reduce((s, f) => s + getEcart(f), 0))
+              const nbRegle = manquants.filter(f => f.manquant_regle).length
+              return (
+                <div className="grid grid-cols-4 gap-3">
+                  {[
+                    { label: 'Manquants non réglés', value: totalManq.toLocaleString() + ' F', bg: '#FEF2F2', color: '#991B1B', icon: '⚠️' },
+                    { label: 'Surplus non réglés', value: totalSurp.toLocaleString() + ' F', bg: '#EEF2FF', color: '#2A4E94', icon: '🔵' },
+                    { label: 'Écarts réglés', value: nbRegle, bg: '#F0FDF4', color: '#166534', icon: '✅' },
+                    { label: 'Fiches concernées', value: manquants.length, bg: '#FEF9C3', color: '#854D0E', icon: '📋' },
+                  ].map(s => (
+                    <div key={s.label} className="rounded-2xl p-4" style={{ backgroundColor: s.bg }}>
+                      <div className="text-2xl mb-1">{s.icon}</div>
+                      <div className="font-bold text-lg" style={{ color: s.color }}>{s.value}</div>
+                      <div className="text-xs mt-0.5" style={{ color: s.color }}>{s.label}</div>
+                    </div>
+                  ))}
                 </div>
-                <div className="font-bold text-lg" style={{ color: s.color }}>{s.value}</div>
+              )
+            })()}
+
+            <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3">
+              <input type="text" placeholder="Rechercher par agent..."
+                value={manquantSearch} onChange={e => setManquantSearch(e.target.value)}
+                className="w-full px-4 py-2 rounded-xl border text-sm outline-none"
+                style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+              <div className="flex flex-wrap gap-2">
+                <select value={manquantFilterAgence} onChange={e => setManquantFilterAgence(e.target.value)}
+                  className="px-3 py-2 rounded-xl border text-xs outline-none"
+                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+                  <option value="tous">Toutes les agences</option>
+                  {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
+                </select>
+                <select value={manquantFilterStatut} onChange={e => setManquantFilterStatut(e.target.value)}
+                  className="px-3 py-2 rounded-xl border text-xs outline-none"
+                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+                  <option value="tous">Tous les écarts</option>
+                  <option value="non_regle">⏳ Non réglés</option>
+                  <option value="manquant">⚠️ Manquants</option>
+                  <option value="surplus">🔵 Surplus</option>
+                  <option value="regle">✅ Réglés</option>
+                </select>
+                <input type="date" value={manquantFilterDateDebut} onChange={e => setManquantFilterDateDebut(e.target.value)}
+                  className="px-3 py-2 rounded-xl border text-xs outline-none"
+                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+                <input type="date" value={manquantFilterDateFin} onChange={e => setManquantFilterDateFin(e.target.value)}
+                  className="px-3 py-2 rounded-xl border text-xs outline-none"
+                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
               </div>
-            ))}
-          </div>
-        )
-      })()}
+            </div>
 
-      {/* Filtres */}
-      <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3">
-        <div className="relative">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <svg className="w-4 h-4" style={{ color: '#818387' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-          </div>
-          <input type="text" placeholder="Rechercher par agent..."
-            value={manquantSearch} onChange={e => setManquantSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 rounded-xl border text-sm outline-none"
-            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <select value={manquantFilterAgence} onChange={e => setManquantFilterAgence(e.target.value)}
-            className="px-3 py-2 rounded-xl border text-xs outline-none"
-            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-            <option value="tous">Toutes les agences</option>
-            {agences.map(a => <option key={a.id} value={a.id}>{a.nom}</option>)}
-          </select>
-          <select value={manquantFilterStatut} onChange={e => setManquantFilterStatut(e.target.value)}
-            className="px-3 py-2 rounded-xl border text-xs outline-none"
-            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
-            <option value="tous">Tous les écarts</option>
-            <option value="non_regle">⏳ Non réglés</option>
-            <option value="manquant">⚠️ Manquants</option>
-            <option value="surplus">🔵 Surplus</option>
-            <option value="regle">✅ Réglés</option>
-          </select>
-          <input type="date" value={manquantFilterDateDebut}
-            onChange={e => setManquantFilterDateDebut(e.target.value)}
-            className="px-3 py-2 rounded-xl border text-xs outline-none"
-            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
-          <input type="date" value={manquantFilterDateFin}
-            onChange={e => setManquantFilterDateFin(e.target.value)}
-            className="px-3 py-2 rounded-xl border text-xs outline-none"
-            style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
-          {(manquantSearch || manquantFilterAgence !== 'tous' || manquantFilterStatut !== 'tous' || manquantFilterDateDebut || manquantFilterDateFin) && (
-            <button type="button"
-              onClick={() => {
-                setManquantSearch('')
-                setManquantFilterAgence('tous')
-                setManquantFilterStatut('non_regle')
-                setManquantFilterDateDebut('')
-                setManquantFilterDateFin('')
-              }}
-              className="px-3 py-2 rounded-xl text-xs font-medium"
-              style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
-              ✕ Réinitialiser
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Tableau */}
-      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-        <div className="overflow-y-auto" style={{ maxHeight: '55vh' }}>
-          <table className="w-full">
-            <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
-              <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-              {['Date', 'Agent', 'Agence', 'SMART', 'Caisse', 'Écart', 'Type', 'Actions'].map(h => (
-                  <th key={h} className="text-left px-3 py-3 text-xs font-semibold"
-                    style={{ color: '#818387' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {manquants
-                .filter(f => {
-                  const ec = getEcart(f)
-                  const ms = manquantSearch === '' ||
-                    `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(manquantSearch.toLowerCase())
-                  const ma = manquantFilterAgence === 'tous' || f.agents?.agence_id === manquantFilterAgence
-                  const mst = manquantFilterStatut === 'tous'
-                    || (manquantFilterStatut === 'regle' && f.manquant_regle)
-                    || (manquantFilterStatut === 'non_regle' && !f.manquant_regle)
-                    || (manquantFilterStatut === 'manquant' && ec > 0 && !f.manquant_regle)
-                    || (manquantFilterStatut === 'surplus' && ec < 0 && !f.manquant_regle)
-                  const md1 = !manquantFilterDateDebut || f.date >= manquantFilterDateDebut
-                  const md2 = !manquantFilterDateFin || f.date <= manquantFilterDateFin
-                  return ms && ma && mst && md1 && md2 && ec !== 0
-                })
-                .map((f, i, arr) => {
-                  const ecart = getEcart(f)
-                  const isManquant = ecart > 0
-                  const montant = Math.abs(ecart)
-                  return (
-                    <tr key={f.id}
-                      onClick={() => setSelectedManquant(f)}
-                      className="cursor-pointer hover:bg-gray-50 transition-colors"
-                      style={{
-                        borderBottom: i < arr.length - 1 ? '1px solid #f8fafc' : 'none',
-                        backgroundColor: selectedManquant?.id === f.id ? '#FEF2F2' : undefined
-                      }}>
-                      <td className="px-3 py-3">
-                        <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
-                          {new Date(f.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
-                        </div>
-                        <div className="text-xs" style={{ color: '#818387' }}>
-                          {new Date(f.date).getFullYear()}
-                        </div>
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
-                            style={{ backgroundColor: '#E4322C' }}>
-                            {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
-                          </div>
-                          <div>
-                            <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
-                              {f.agents?.prenom} {f.agents?.nom}
-                            </div>
-                            <div className="text-xs" style={{ color: '#818387' }}>
-                              {f.agents?.telephone || '—'}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-3 text-xs" style={{ color: '#818387' }}>
-                        {f.agents?.agences?.nom || '—'}
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="text-xs font-semibold" style={{ color: '#166534' }}>
-                          {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="text-xs font-semibold" style={{ color: '#2A4E94' }}>
-                          {(f.montant_caisse ?? f.montant_rapporte ?? 0).toLocaleString()} F
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="text-sm font-bold"
-                          style={{ color: f.manquant_regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
-                          {isManquant ? '−' : '+'} {montant.toLocaleString()} F
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                          style={{
-                            backgroundColor: f.manquant_regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
-                            color: f.manquant_regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
-                          }}>
-                          {f.manquant_regle ? '✅ Réglé' : isManquant ? '⚠️ Manquant' : '🔵 Surplus'}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
-                        {!f.manquant_regle && (
-                          <button type="button"
-                            onClick={() => { setReglementFiche(f); setShowReglementModal(true) }}
-                            className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white"
-                            style={{ backgroundColor: '#2A4E94' }}>
-                            💰 Régler
-                          </button>
-                        )}
-                        {f.manquant_regle && f.manquant_regle_at && (
-                          <span className="text-xs" style={{ color: '#818387' }}>
-                            {new Date(f.manquant_regle_at).toLocaleDateString('fr-FR')}
-                          </span>
-                        )}
-                      </td>
+            <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+              <div className="overflow-y-auto" style={{ maxHeight: '55vh' }}>
+                <table className="w-full">
+                  <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
+                    <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      {['Date', 'Agent', 'Agence', 'SMART', 'Caisse', 'Écart', 'Type', 'Actions'].map(h => (
+                        <th key={h} className="text-left px-3 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
+                      ))}
                     </tr>
-                  )
-                })}
-            </tbody>
-          </table>
-          {manquants.length === 0 && (
-            <div className="p-12 text-center">
-              <div className="text-4xl mb-3">✅</div>
-              <div className="font-medium text-sm" style={{ color: '#166534' }}>Aucun écart</div>
-              <div className="text-xs mt-1" style={{ color: '#818387' }}>
-                Toutes les caisses sont équilibrées !
+                  </thead>
+                  <tbody>
+                    {manquants.filter(f => {
+                      const ec = getEcart(f)
+                      const ms = manquantSearch === '' ||
+                        `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(manquantSearch.toLowerCase())
+                      const ma = manquantFilterAgence === 'tous' || f.agents?.agence_id === manquantFilterAgence
+                      const mst = manquantFilterStatut === 'tous'
+                        || (manquantFilterStatut === 'regle' && f.manquant_regle)
+                        || (manquantFilterStatut === 'non_regle' && !f.manquant_regle)
+                        || (manquantFilterStatut === 'manquant' && ec > 0 && !f.manquant_regle)
+                        || (manquantFilterStatut === 'surplus' && ec < 0 && !f.manquant_regle)
+                      const md1 = !manquantFilterDateDebut || f.date >= manquantFilterDateDebut
+                      const md2 = !manquantFilterDateFin || f.date <= manquantFilterDateFin
+                      return ms && ma && mst && md1 && md2 && ec !== 0
+                    }).map((f, i, arr) => {
+                      const ecart = getEcart(f)
+                      const isManquant = ecart > 0
+                      const montant = Math.abs(ecart)
+                      return (
+                        <tr key={f.id} onClick={() => setSelectedManquant(f)}
+                          className="cursor-pointer hover:bg-gray-50 transition-colors"
+                          style={{
+                            borderBottom: i < arr.length - 1 ? '1px solid #f8fafc' : 'none',
+                            backgroundColor: selectedManquant?.id === f.id ? '#FEF2F2' : undefined
+                          }}>
+                          <td className="px-3 py-3 text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                            {new Date(f.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
+                                style={{ backgroundColor: isManquant ? '#E4322C' : '#2A4E94' }}>
+                                {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
+                              </div>
+                              <div>
+                                <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                                  {f.agents?.prenom} {f.agents?.nom}
+                                </div>
+                                <div className="text-xs" style={{ color: '#818387' }}>{f.agents?.telephone || '—'}</div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-3 text-xs" style={{ color: '#818387' }}>{f.agents?.agences?.nom || '—'}</td>
+                          <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#166534' }}>
+                            {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
+                          </td>
+                          <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#2A4E94' }}>
+                            {(f.montant_caisse ?? f.montant_rapporte ?? 0).toLocaleString()} F
+                          </td>
+                          <td className="px-3 py-3 text-sm font-bold"
+                            style={{ color: f.manquant_regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
+                            {isManquant ? '−' : '+'} {montant.toLocaleString()} F
+                          </td>
+                          <td className="px-3 py-3">
+                            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                              style={{
+                                backgroundColor: f.manquant_regle ? '#DCFCE7' : isManquant ? '#FEE2E2' : '#E0E7FF',
+                                color: f.manquant_regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94'
+                              }}>
+                              {f.manquant_regle ? '✅ Réglé' : isManquant ? '⚠️ Manquant' : '🔵 Surplus'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                            {!f.manquant_regle && (
+                              <button type="button"
+                                onClick={() => { setReglementFiche(f); setShowReglementModal(true) }}
+                                className="px-2 py-1.5 rounded-lg text-xs font-semibold text-white"
+                                style={{ backgroundColor: '#2A4E94' }}>
+                                Régler
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
               </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
 
-{/* Panneau détail écart */}
-{selectedManquant && (() => {
-      const ecart = getEcart(selectedManquant)
-      const isManquant = ecart > 0
-      const montant = Math.abs(ecart)
-      const regle = selectedManquant.manquant_regle
-      return (
-        <div className="w-1/2 space-y-4">
-          <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-
-            <div className="p-5 border-b flex items-start justify-between" style={{ borderColor: '#f1f5f9' }}>
-              <div>
-                <div className="font-bold text-base" style={{ color: '#1a1a2e' }}>
-                  {isManquant ? '⚠️ Manquant' : '🔵 Surplus'} — {new Date(selectedManquant.date).toLocaleDateString('fr-FR', {
-                    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-                  })}
-                </div>
-                <div className="text-sm mt-0.5" style={{ color: '#818387' }}>
-                  {selectedManquant.agents?.prenom} {selectedManquant.agents?.nom}
-                  · {selectedManquant.agents?.agences?.nom}
-                </div>
-              </div>
-              <button type="button" onClick={() => setSelectedManquant(null)}
-                className="p-1.5 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
-            </div>
-
-            <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-              <div className="rounded-2xl p-5 text-center"
-                style={{
-                  backgroundColor: regle ? '#F0FDF4' : isManquant ? '#FEF2F2' : '#EEF2FF',
-                  border: `1px solid ${regle ? '#BBF7D0' : isManquant ? '#FECACA' : '#C7D2FE'}`
-                }}>
-                <div className="text-3xl font-bold mb-1"
-                  style={{ color: regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
-                  {isManquant ? '−' : '+'} {montant.toLocaleString()} FCFA
-                </div>
-                <div className="text-sm" style={{ color: regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94' }}>
-                  {regle
-                    ? (isManquant ? '✅ Manquant réglé' : '✅ Surplus régularisé')
-                    : (isManquant ? '⚠️ Non réglé' : '🔵 Non régularisé')}
-                </div>
-                {regle && selectedManquant.manquant_regle_at && (
+              {manquants.length === 0 && (
+                <div className="p-12 text-center">
+                  <div className="text-4xl mb-3">✅</div>
+                  <div className="font-medium text-sm" style={{ color: '#166534' }}>Aucun écart</div>
                   <div className="text-xs mt-1" style={{ color: '#818387' }}>
-                    Réglé le {new Date(selectedManquant.manquant_regle_at).toLocaleDateString('fr-FR')}
+                    Toutes les caisses sont équilibrées !
                   </div>
-                )}
-              </div>
-            </div>
-
-            <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-              <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>DÉTAIL DE LA FICHE</h4>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { label: 'SMART (théorique)', value: (selectedManquant.montant_smart ?? selectedManquant.montant_mobilise ?? 0).toLocaleString() + ' F' },
-                  { label: 'Caisse (rapporté)', value: (selectedManquant.montant_caisse ?? selectedManquant.montant_rapporte ?? 0).toLocaleString() + ' F' },
-                  { label: 'Commission', value: (selectedManquant.commission_jour || 0).toLocaleString() + ' F' },
-                  { label: 'Comptes DAT', value: selectedManquant.comptes_ouverts_dat ?? selectedManquant.comptes_ouverts ?? 0 },
-                  { label: 'Téléphone agent', value: selectedManquant.agents?.telephone || '—' },
-                  { label: 'Adhésions', value: selectedManquant.nb_adhesions || 0 },
-                ].map(k => (
-                  <div key={k.label} className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
-                    <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
-                    <div className="font-bold text-sm mt-0.5" style={{ color: '#1a1a2e' }}>{k.value}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {selectedManquant.commentaire_chef && (
-              <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-                <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>NOTE</h4>
-                <p className="text-sm" style={{ color: '#1a1a2e' }}>{selectedManquant.commentaire_chef}</p>
-              </div>
-            )}
-
-            <div className="p-5">
-              {!regle ? (
-                <button type="button"
-                  onClick={() => { setReglementFiche(selectedManquant); setShowReglementModal(true) }}
-                  className="w-full py-3 rounded-xl text-white text-sm font-semibold"
-                  style={{ backgroundColor: '#2A4E94' }}>
-                  {isManquant ? '💰 Confirmer le règlement' : '✅ Confirmer la régularisation'}
-                </button>
-              ) : (
-                <div className="text-center text-sm font-medium" style={{ color: '#166534' }}>
-                  ✅ Cet écart a été réglé
                 </div>
               )}
             </div>
           </div>
+
+          {/* Panneau détail écart */}
+          {selectedManquant && (() => {
+            const ecart = getEcart(selectedManquant)
+            const isManquant = ecart > 0
+            const montant = Math.abs(ecart)
+            const regle = selectedManquant.manquant_regle
+            return (
+              <div className="w-1/2 space-y-4">
+                <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
+                  <div className="p-5 border-b flex items-start justify-between" style={{ borderColor: '#f1f5f9' }}>
+                    <div>
+                      <div className="font-bold text-base" style={{ color: '#1a1a2e' }}>
+                        {isManquant ? '⚠️ Manquant' : '🔵 Surplus'} — {new Date(selectedManquant.date).toLocaleDateString('fr-FR', {
+                          weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+                        })}
+                      </div>
+                      <div className="text-sm mt-0.5" style={{ color: '#818387' }}>
+                        {selectedManquant.agents?.prenom} {selectedManquant.agents?.nom}
+                        · {selectedManquant.agents?.agences?.nom}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => setSelectedManquant(null)}
+                      className="p-1.5 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+                  </div>
+
+                  <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+                    <div className="rounded-2xl p-5 text-center"
+                      style={{
+                        backgroundColor: regle ? '#F0FDF4' : isManquant ? '#FEF2F2' : '#EEF2FF',
+                        border: `1px solid ${regle ? '#BBF7D0' : isManquant ? '#FECACA' : '#C7D2FE'}`
+                      }}>
+                      <div className="text-3xl font-bold mb-1"
+                        style={{ color: regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
+                        {isManquant ? '−' : '+'} {montant.toLocaleString()} FCFA
+                      </div>
+                      <div className="text-sm" style={{ color: regle ? '#166534' : isManquant ? '#991B1B' : '#2A4E94' }}>
+                        {regle
+                          ? (isManquant ? '✅ Manquant réglé' : '✅ Surplus régularisé')
+                          : (isManquant ? '⚠️ Non réglé' : '🔵 Non régularisé')}
+                      </div>
+                      {regle && selectedManquant.manquant_regle_at && (
+                        <div className="text-xs mt-1" style={{ color: '#818387' }}>
+                          Réglé le {new Date(selectedManquant.manquant_regle_at).toLocaleDateString('fr-FR')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+                    <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>DÉTAIL DE LA FICHE</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { label: 'SMART (théorique)', value: (selectedManquant.montant_smart ?? selectedManquant.montant_mobilise ?? 0).toLocaleString() + ' F' },
+                        { label: 'Caisse (rapporté)', value: (selectedManquant.montant_caisse ?? selectedManquant.montant_rapporte ?? 0).toLocaleString() + ' F' },
+                        { label: 'Commission', value: (selectedManquant.commission_jour || 0).toLocaleString() + ' F' },
+                        { label: 'Comptes DAT', value: selectedManquant.comptes_ouverts_dat ?? selectedManquant.comptes_ouverts ?? 0 },
+                        { label: 'Téléphone agent', value: selectedManquant.agents?.telephone || '—' },
+                        { label: 'Adhésions', value: selectedManquant.nb_adhesions || 0 },
+                      ].map(k => (
+                        <div key={k.label} className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
+                          <div className="text-xs" style={{ color: '#818387' }}>{k.label}</div>
+                          <div className="font-bold text-sm mt-0.5" style={{ color: '#1a1a2e' }}>{k.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {selectedManquant.commentaire_chef && (
+                    <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+                      <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>NOTE</h4>
+                      <p className="text-sm" style={{ color: '#1a1a2e' }}>{selectedManquant.commentaire_chef}</p>
+                    </div>
+                  )}
+
+                  <div className="p-5">
+                    {!regle ? (
+                      <button type="button"
+                        onClick={() => { setReglementFiche(selectedManquant); setShowReglementModal(true) }}
+                        className="w-full py-3 rounded-xl text-white text-sm font-semibold"
+                        style={{ backgroundColor: '#2A4E94' }}>
+                        {isManquant ? '💰 Confirmer le règlement' : '✅ Confirmer la régularisation'}
+                      </button>
+                    ) : (
+                      <div className="text-center text-sm font-medium" style={{ color: '#166534' }}>
+                        ✅ Cet écart a été réglé
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
         </div>
-      )
-    })()}
-  </div>
-)}
+      )}
 
           {/* Sections à venir */}
           {!['dashboard', 'agences', 'agents', 'objectifs', 'fiches', 'alertes', 'parametres', 'equipes', 'permissions', 'manquants'].includes(tab) && (
