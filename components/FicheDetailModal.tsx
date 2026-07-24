@@ -1,5 +1,7 @@
 'use client'
 
+import EcartHistorique from './EcartHistorique'
+
 interface FicheDetailModalProps {
   fiche: any
   onClose: () => void
@@ -134,6 +136,18 @@ export default function FicheDetailModal({
               </div>
             </div>
           </Section>
+
+          {/* 💰 RÉGULARISATIONS */}
+          {typeEcart !== 'ok' && (
+            <Section titre="💰 RÉGULARISATIONS">
+              <EcartHistorique
+                ficheId={fiche.id}
+                ecartTotal={Math.abs(ecart)}
+                montantRegularise={fiche.montant_regularise || 0}
+                isManquant={typeEcart === 'manquant'}
+              />
+            </Section>
+          )}
 
           {/* 📊 ACTIVITÉS */}
           <Section titre="📊 ACTIVITÉS TERRAIN">

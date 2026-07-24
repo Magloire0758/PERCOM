@@ -5,6 +5,8 @@ import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import FicheDetail from '@/components/FicheDetail'
 import FicheDetailModal from '@/components/FicheDetailModal'
+import RegularisationModal from '@/components/RegularisationModal'   // ← AJOUTER
+import EcartHistorique from '@/components/EcartHistorique'   
 
 type ActiveTab = 'accueil' | 'fiches' | 'equipe' | 'manquants' | 'performance' | 'messages' | 'profil'
 
@@ -39,6 +41,10 @@ export default function DashboardChef() {
   // Modal détail fiche
   const [detailFiche, setDetailFiche] = useState<any>(null)
   const [detailCanValidate, setDetailCanValidate] = useState(false)
+  const [showRegulModal, setShowRegulModal] = useState(false)
+  const [regulFiche, setRegulFiche] = useState<any>(null)
+  const [ecartsEquipe, setEcartsEquipe] = useState<any[]>([])
+  const [selectedEcart, setSelectedEcart] = useState<any>(null)
   const [equipeStats, setEquipeStats] = useState({
     totalComptes: 0, totalCollecte: 0, totalCommissions: 0,
     totalManquants: 0, totalSurplus: 0, nbEcarts: 0, fichesNonValidees: 0
@@ -244,16 +250,25 @@ if (allMemberIds.length > 0) {
   const totalCollecte = (fichesMois || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
   const totalCommissions = (fichesMois || []).reduce((s, f) => s + (f.commission_jour || 0), 0)
 
+  // Écarts de l'équipe (pour régularisation)
+  const { data: ecartsData } = await supabase.from('fiches_journalieres')
+  .select('*, agents!fiches_journalieres_agent_id_fkey(nom, prenom, telephone, agences(nom))')
+  .in('agent_id', allMemberIds)
+  .order('date', { ascending: false })
+setEcartsEquipe((ecartsData || []).filter(f => f && getEcart(f) !== 0))
+
   // Écarts non réglés (manquants + surplus)
   const { data: ecarts } = await supabase.from('fiches_journalieres')
-    .select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte')
-    .eq('manquant_regle', false).in('agent_id', allMemberIds)
-  let totalManquants = 0, totalSurplus = 0, nbEcarts = 0
-  ;(ecarts || []).forEach(f => {
-    const e = (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
-    if (e > 0) { totalManquants += e; nbEcarts++ }
-    else if (e < 0) { totalSurplus += Math.abs(e); nbEcarts++ }
-  })
+  .select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte, montant_regularise')
+  .eq('manquant_regle', false).in('agent_id', allMemberIds)
+let totalManquants = 0, totalSurplus = 0, nbEcarts = 0
+;(ecarts || []).forEach(f => {
+  const e = (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+  const restant = Math.abs(e) - (f.montant_regularise || 0)
+  if (restant <= 0) return
+  if (e > 0) { totalManquants += restant; nbEcarts++ }
+  else if (e < 0) { totalSurplus += restant; nbEcarts++ }
+})
 
   const { count: fichesNonValidees } = await supabase.from('fiches_journalieres')
     .select('*', { count: 'exact', head: true }).eq('valide_chef', false).in('agent_id', allMemberIds)
@@ -286,7 +301,7 @@ if (allMemberIds.length > 0) {
     }).eq('id', ficheId)
 
     // Notification à l'agent
-    const fiche = memberFiches.find(f => f.id === ficheId)
+    const fiche = memberFiches.find(f => f.id === ficheId) || fiches.find(f => f.id === ficheId)
     if (fiche) {
       const titres: Record<string, string> = {
         validee: '✅ Fiche validée', rejetee: '❌ Fiche rejetée', a_corriger: '🔄 Fiche à corriger'
@@ -305,6 +320,13 @@ if (allMemberIds.length > 0) {
 
     setMemberFiches(prev => prev.map(f => f.id === ficheId
       ? { ...f, valide_chef: statut === 'validee', statut_validation: statut, commentaire_chef: commentaire || null } : f))
+
+    // Mettre à jour aussi ses propres fiches
+    setFiches(prev => prev.map(f => f.id === ficheId
+      ? { ...f, valide_chef: statut === 'validee', statut_validation: statut, commentaire_chef: commentaire || null } : f))
+    if (ficheDuJour?.id === ficheId) {
+      setFicheDuJour((prev: any) => ({ ...prev, valide_chef: statut === 'validee', statut_validation: statut, commentaire_chef: commentaire || null }))
+    }
 
     // Rafraîchir le compteur du membre
     if (fiche) {
@@ -376,6 +398,11 @@ if (allMemberIds.length > 0) {
 const getEcart = (f: any) => {
   if (!f) return 0
   return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+}
+
+const getRestant = (f: any) => {
+  if (!f) return 0
+  return Math.abs(getEcart(f)) - (f.montant_regularise || 0)
 }
 
 // ── Calculs agent ──
@@ -878,7 +905,7 @@ const totalCollecte = totalSmart
                         </div>
                       )}
 
-<div className="flex gap-2">
+                    <div className="flex gap-2">
                         <button type="button"
                           onClick={() => { setDetailFiche(fiche); setDetailCanValidate(false) }}
                           className="flex-1 py-2 rounded-xl text-xs font-semibold"
@@ -886,12 +913,25 @@ const totalCollecte = totalSmart
                           👁️ Détails
                         </button>
                         {fiche.statut_validation !== 'validee' && (
-                          <button type="button"
-                            onClick={() => router.push(`/dashboard/agent/fiche?edit=${fiche.id}`)}
-                            className="flex-1 py-2 rounded-xl text-xs font-semibold"
-                            style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
-                            ✏️ Modifier
-                          </button>
+                          <>
+                            <button type="button"
+                              onClick={() => router.push(`/dashboard/agent/fiche?edit=${fiche.id}`)}
+                              className="flex-1 py-2 rounded-xl text-xs font-semibold"
+                              style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
+                              ✏️ Modifier
+                            </button>
+                            <button type="button"
+                              onClick={() => {
+                                setValidationFiche(fiche)
+                                setValidationStatut('validee')
+                                setValidationCommentaire('')
+                                setShowValidationModal(true)
+                              }}
+                              className="flex-1 py-2 rounded-xl text-xs font-semibold"
+                              style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
+                              ✅ Valider
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -1175,22 +1215,233 @@ const totalCollecte = totalSmart
                           </div>
                         </div>
                       </div>
-                      {!regle && (
-                        <div className="mt-3 text-xs p-3 rounded-xl"
-                          style={{
-                            backgroundColor: isManquant ? '#FEF9C3' : '#EEF2FF',
-                            color: isManquant ? '#854D0E' : '#2A4E94'
-                          }}>
-                          {isManquant
-                            ? '⏳ En attente de régularisation auprès de la caisse'
-                            : '⏳ En attente de confirmation du surplus'}
+                      {(fiche.montant_regularise || 0) > 0 && (
+                        <div className="mt-2 text-xs" style={{ color: '#166534' }}>
+                          💰 {(fiche.montant_regularise || 0).toLocaleString()} F déjà régularisé — restant {Math.max(0, getRestant(fiche)).toLocaleString()} F
                         </div>
+                      )}
+
+                      {getRestant(fiche) > 0 && (
+                        <button type="button"
+                          onClick={() => { setRegulFiche(fiche); setShowRegulModal(true) }}
+                          className="w-full mt-3 py-2.5 rounded-xl text-white text-xs font-semibold"
+                          style={{ backgroundColor: '#2A4E94' }}>
+                          💰 Régulariser
+                        </button>
                       )}
                     </div>
                   )
                 })}
+
+                {/* ── ÉCARTS DE L'ÉQUIPE ── */}
+            {ecartsEquipe.filter(f => f.agent_id !== agent?.id).length > 0 && (
+              <div className="pt-4 mt-4 border-t" style={{ borderColor: border }}>
+                <h2 className="text-sm font-bold mb-3" style={{ color: text }}>
+                  👥 Écarts de mon équipe
+                </h2>
+
+                {/* Stats équipe */}
+                {(() => {
+                  const ecartsMembres = ecartsEquipe.filter(f => f.agent_id !== agent?.id && !f.manquant_regle)
+                  const totalManq = ecartsMembres.filter(f => getEcart(f) > 0).reduce((s, f) => s + getRestant(f), 0)
+                  const totalSurp = ecartsMembres.filter(f => getEcart(f) < 0).reduce((s, f) => s + getRestant(f), 0)
+                  return (
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      {[
+                        { label: 'Manquants', value: totalManq.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
+                        { label: 'Surplus', value: totalSurp.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
+                        { label: 'À traiter', value: ecartsMembres.length, color: '#854D0E', bg: '#FEF9C3' },
+                      ].map(s => (
+                        <div key={s.label} className="rounded-2xl p-3 text-center" style={{ backgroundColor: s.bg }}>
+                          <div className="font-bold text-sm" style={{ color: s.color }}>{s.value}</div>
+                          <div className="text-xs mt-0.5" style={{ color: s.color }}>{s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
+
+                {/* Liste */}
+                <div className="space-y-3">
+                  {ecartsEquipe.filter(f => f.agent_id !== agent?.id).map(f => {
+                    const ec = getEcart(f)
+                    const isManq = ec > 0
+                    const restant = getRestant(f)
+                    const regle = f.manquant_regle
+                    const isOpen = selectedEcart?.id === f.id
+                    return (
+                      <div key={f.id} className="rounded-2xl overflow-hidden"
+                        style={{
+                          backgroundColor: card,
+                          border: `1px solid ${regle ? '#BBF7D0' : isManq ? '#FECACA' : '#C7D2FE'}`
+                        }}>
+                        <button type="button"
+                          onClick={() => setSelectedEcart(isOpen ? null : f)}
+                          className="w-full p-4 text-left">
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <div className="font-semibold text-sm" style={{ color: text }}>
+                                {f.agents?.prenom} {f.agents?.nom}
+                              </div>
+                              <div className="text-xs mt-0.5" style={{ color: sub }}>
+                                {new Date(f.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'long' })}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-bold text-lg"
+                                style={{ color: regle ? '#166534' : isManq ? '#E4322C' : '#2A4E94' }}>
+                                {isManq ? '−' : '+'} {Math.max(0, restant).toLocaleString()} F
+                              </div>
+                              <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                                style={{
+                                  backgroundColor: regle ? '#DCFCE7' : isManq ? '#FEE2E2' : '#E0E7FF',
+                                  color: regle ? '#166534' : isManq ? '#991B1B' : '#2A4E94'
+                                }}>
+                                {regle ? '✅ Réglé' : isManq ? '⚠️ Manquant' : '🔵 Surplus'}
+                              </span>
+                            </div>
+                          </div>
+                          {(f.montant_regularise || 0) > 0 && (
+                            <div className="text-xs" style={{ color: '#166534' }}>
+                              💰 {(f.montant_regularise || 0).toLocaleString()} F déjà régularisé sur {Math.abs(ec).toLocaleString()} F
+                            </div>
+                          )}
+                          <div className="text-xs mt-2 text-right" style={{ color: sub }}>
+                            {isOpen ? '▲ Réduire' : '▼ Détails'}
+                          </div>
+                        </button>
+
+                        {isOpen && (
+                          <div className="border-t p-4" style={{ borderColor: border }}>
+                            <EcartHistorique
+                              ficheId={f.id}
+                              ecartTotal={Math.abs(ec)}
+                              montantRegularise={f.montant_regularise || 0}
+                              isManquant={isManq}
+                              isDark={isDark}
+                            />
+                            {restant > 0 && (
+                              <button type="button"
+                                onClick={() => { setRegulFiche(f); setShowRegulModal(true) }}
+                                className="w-full mt-3 py-3 rounded-xl text-white text-sm font-semibold"
+                                style={{ backgroundColor: '#2A4E94' }}>
+                                💰 Enregistrer une régularisation
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
+              </div>
+            )}
+
+             {/* ── ÉCARTS DE L'ÉQUIPE ── */}
+             {ecartsEquipe.filter(f => f.agent_id !== agent?.id).length > 0 && (
+              <div className="pt-4 mt-4 border-t" style={{ borderColor: border }}>
+                <h2 className="text-sm font-bold mb-3" style={{ color: text }}>
+                  👥 Écarts de mon équipe
+                </h2>
+
+                {(() => {
+                  const ecartsMembres = ecartsEquipe.filter(f => f.agent_id !== agent?.id && !f.manquant_regle)
+                  const totalManq = ecartsMembres.filter(f => getEcart(f) > 0).reduce((s, f) => s + getRestant(f), 0)
+                  const totalSurp = ecartsMembres.filter(f => getEcart(f) < 0).reduce((s, f) => s + getRestant(f), 0)
+                  return (
+                    <div className="grid grid-cols-3 gap-2 mb-3">
+                      {[
+                        { label: 'Manquants', value: totalManq.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
+                        { label: 'Surplus', value: totalSurp.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
+                        { label: 'À traiter', value: ecartsMembres.length, color: '#854D0E', bg: '#FEF9C3' },
+                      ].map(s => (
+                        <div key={s.label} className="rounded-2xl p-3 text-center" style={{ backgroundColor: s.bg }}>
+                          <div className="font-bold text-sm" style={{ color: s.color }}>{s.value}</div>
+                          <div className="text-xs mt-0.5" style={{ color: s.color }}>{s.label}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
+
+                <div className="space-y-3">
+                  {ecartsEquipe.filter(f => f.agent_id !== agent?.id).map(f => {
+                    const ec = getEcart(f)
+                    const isManq = ec > 0
+                    const restant = getRestant(f)
+                    const regle = f.manquant_regle
+                    const isOpen = selectedEcart?.id === f.id
+                    return (
+                      <div key={f.id} className="rounded-2xl overflow-hidden"
+                        style={{
+                          backgroundColor: card,
+                          border: `1px solid ${regle ? '#BBF7D0' : isManq ? '#FECACA' : '#C7D2FE'}`
+                        }}>
+                        <button type="button"
+                          onClick={() => setSelectedEcart(isOpen ? null : f)}
+                          className="w-full p-4 text-left">
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <div className="font-semibold text-sm" style={{ color: text }}>
+                                {f.agents?.prenom} {f.agents?.nom}
+                              </div>
+                              <div className="text-xs mt-0.5" style={{ color: sub }}>
+                                {new Date(f.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'long' })}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="font-bold text-lg"
+                                style={{ color: regle ? '#166534' : isManq ? '#E4322C' : '#2A4E94' }}>
+                                {isManq ? '−' : '+'} {Math.max(0, restant).toLocaleString()} F
+                              </div>
+                              <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                                style={{
+                                  backgroundColor: regle ? '#DCFCE7' : isManq ? '#FEE2E2' : '#E0E7FF',
+                                  color: regle ? '#166534' : isManq ? '#991B1B' : '#2A4E94'
+                                }}>
+                                {regle ? '✅ Réglé' : isManq ? '⚠️ Manquant' : '🔵 Surplus'}
+                              </span>
+                            </div>
+                          </div>
+                          {(f.montant_regularise || 0) > 0 && (
+                            <div className="text-xs" style={{ color: '#166534' }}>
+                              💰 {(f.montant_regularise || 0).toLocaleString()} F déjà régularisé sur {Math.abs(ec).toLocaleString()} F
+                            </div>
+                          )}
+                          <div className="text-xs mt-2 text-right" style={{ color: sub }}>
+                            {isOpen ? '▲ Réduire' : '▼ Détails'}
+                          </div>
+                        </button>
+
+                        {isOpen && (
+                          <div className="border-t p-4" style={{ borderColor: border }}>
+                            <EcartHistorique
+                              ficheId={f.id}
+                              ecartTotal={Math.abs(ec)}
+                              montantRegularise={f.montant_regularise || 0}
+                              isManquant={isManq}
+                              isDark={isDark}
+                            />
+                            {restant > 0 && (
+                              <button type="button"
+                                onClick={() => { setRegulFiche(f); setShowRegulModal(true) }}
+                                className="w-full mt-3 py-3 rounded-xl text-white text-sm font-semibold"
+                                style={{ backgroundColor: '#2A4E94' }}>
+                                💰 Enregistrer une régularisation
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+
           </div>
         )}
 
@@ -1509,7 +1760,7 @@ const totalCollecte = totalSmart
             { key: 'accueil', label: 'Accueil', icon: '🏠' },
             { key: 'fiches', label: 'Mes fiches', icon: '📋' },
             { key: 'equipe', label: 'Équipe', icon: '👥', badge: equipeStats.fichesNonValidees },
-            { key: 'manquants', label: 'Écarts', icon: '⚖️', badge: ecartsNonRegles.length },
+            { key: 'manquants', label: 'Écarts', icon: '⚖️', badge: ecartsNonRegles.length + ecartsEquipe.filter(f => f.agent_id !== agent?.id && !f.manquant_regle).length },
             { key: 'performance', label: 'Stats', icon: '📈' },
             { key: 'messages', label: 'Messages', icon: '💬', badge: messagesNonLus },
             { key: 'profil', label: 'Profil', icon: '👤' },
@@ -1536,6 +1787,21 @@ const totalCollecte = totalSmart
 
       {/* Padding bas */}
       <div className="h-20" />
+
+      {/* MODAL RÉGULARISATION */}
+      {showRegulModal && regulFiche && (
+        <RegularisationModal
+          fiche={regulFiche}
+          onClose={() => { setShowRegulModal(false); setRegulFiche(null) }}
+          onSuccess={() => {
+            if (agent) {
+              loadFiches(agent.id)
+              loadEquipe(agent)
+            }
+            setSelectedEcart(null)
+          }}
+        />
+      )}
 
       {/* MODAL DÉTAIL FICHE */}
       {detailFiche && (

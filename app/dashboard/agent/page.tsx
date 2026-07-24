@@ -4,6 +4,9 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import FicheDetail from '@/components/FicheDetail'
+import EcartHistorique from '@/components/EcartHistorique'   // ← AJOUTER
+
+
 
 type ActiveTab = 'accueil' | 'fiches' | 'manquants' | 'performance' | 'messages' | 'profil'
 
@@ -253,6 +256,11 @@ const getEcart = (f: any) => {
   return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
 }
 
+const getRestant = (f: any) => {
+  if (!f) return 0
+  return Math.abs(getEcart(f)) - (f.montant_regularise || 0)
+}
+
 const fichesMois = fiches.filter(f => f && new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
 const totalComptesDat = fichesMois.reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0)
 const totalSmart = fichesMois.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
@@ -290,8 +298,8 @@ const totalCollecte = totalSmart
   const ecartsNonRegles = ecartsListe.filter(f => !f.manquant_regle)
   const manquantsNonRegles = ecartsNonRegles.filter(f => getEcart(f) > 0)
   const surplusNonRegles = ecartsNonRegles.filter(f => getEcart(f) < 0)
-  const totalManquants = manquantsNonRegles.reduce((s, f) => s + getEcart(f), 0)
-  const totalSurplus = Math.abs(surplusNonRegles.reduce((s, f) => s + getEcart(f), 0))
+  const totalManquants = manquantsNonRegles.reduce((s, f) => s + getRestant(f), 0)
+  const totalSurplus = surplusNonRegles.reduce((s, f) => s + getRestant(f), 0)
   const monRang = classement.findIndex(a => a.id === agent?.id) + 1
   const notifNonLues = notifications.filter(n => !n.lu).length
   const messagesNonLus = messages.filter(m => m.destinataire_id === agent?.id && !m.lu).length
@@ -896,10 +904,10 @@ const totalCollecte = totalSmart
 
             {/* Stats */}
             <div className="grid grid-cols-3 gap-3">
-              {[
-                { label: 'Manquants', value: totalManquants.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
-                { label: 'Surplus', value: totalSurplus.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
-                { label: 'Réglés', value: ecartsListe.filter(f => f.manquant_regle).length, color: '#166534', bg: '#F0FDF4' },
+            {[
+                { label: 'Manquants restants', value: ecartsNonRegles.filter(f => getEcart(f) > 0).reduce((s, f) => s + getRestant(f), 0).toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2' },
+                { label: 'Surplus restants', value: ecartsNonRegles.filter(f => getEcart(f) < 0).reduce((s, f) => s + getRestant(f), 0).toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF' },
+                { label: 'Régularisé', value: ecartsListe.reduce((s, f) => s + (f.montant_regularise || 0), 0).toLocaleString() + ' F', color: '#166534', bg: '#F0FDF4' },
               ].map(s => (
                 <div key={s.label} className="rounded-2xl p-4 text-center" style={{ backgroundColor: s.bg }}>
                   <div className="font-bold text-base" style={{ color: s.color }}>{s.value}</div>
@@ -967,15 +975,26 @@ const totalCollecte = totalSmart
                         </div>
                       )}
 
-                      {!regle && (
+                      {/* Historique des régularisations */}
+                      <div className="mt-3 pt-3 border-t" style={{ borderColor: border }}>
+                        <EcartHistorique
+                          ficheId={fiche.id}
+                          ecartTotal={montant}
+                          montantRegularise={fiche.montant_regularise || 0}
+                          isManquant={isManquant}
+                          isDark={isDark}
+                        />
+                      </div>
+
+                      {!regle && getRestant(fiche) > 0 && (
                         <div className="mt-3 text-xs p-3 rounded-xl"
                           style={{
                             backgroundColor: isManquant ? '#FEF9C3' : '#EEF2FF',
                             color: isManquant ? '#854D0E' : '#2A4E94'
                           }}>
                           {isManquant
-                            ? '⏳ En attente de régularisation auprès de la caisse'
-                            : '⏳ En attente de confirmation du surplus par le chef'}
+                            ? '⏳ Restant à régulariser auprès de la caisse'
+                            : '⏳ Restant à reverser au client'}
                         </div>
                       )}
                     </div>
