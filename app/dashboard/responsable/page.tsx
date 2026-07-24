@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import FicheDetail from '@/components/FicheDetail' 
+import FicheDetailModal from '@/components/FicheDetailModal' 
 
 type Tab = 'dashboard' | 'agents' | 'equipes' | 'objectifs' | 'fiches' | 'alertes' | 'manquants' | 'parametres'
 
@@ -80,6 +81,10 @@ export default function DashboardResponsable() {
   const [manquantSearch, setManquantSearch] = useState('')
   const [manquantFilterStatut, setManquantFilterStatut] = useState('tous')
   const [selectedManquant, setSelectedManquant] = useState<any>(null)
+  
+  // Filtre rôle + modal détail
+  const [ficheFilterRole, setFicheFilterRole] = useState('tous')
+  const [detailFiche, setDetailFiche] = useState<any>(null)
 
   // Paramètres
   const [respForm, setRespForm] = useState({ nom: '', prenom: '', telephone: '' })
@@ -174,8 +179,22 @@ export default function DashboardResponsable() {
     const al = []
     if ((enAttente || 0) > 0) al.push({ type: 'warning', message: `${enAttente} agent(s) en attente`, action: 'agents' })
     if (nbEcarts > 0) al.push({ type: 'error', message: `${nbEcarts} écart(s) — ${manquantsTotal.toLocaleString()} F manquant, ${surplusTotal.toLocaleString()} F surplus`, action: 'manquants' })
-    if ((fichesNonValides || 0) > 0) al.push({ type: 'info', message: `${fichesNonValides} fiche(s) à valider`, action: 'fiches' })
-    setAlertesDash(al)
+      if ((fichesNonValides || 0) > 0) al.push({ type: 'info', message: `${fichesNonValides} fiche(s) à valider`, action: 'fiches' })
+
+        // Fiches de chefs en attente
+        const { data: chefsAgence } = await supabase.from('agents')
+          .select('id').eq('agence_id', r.agence_id).eq('role', 'chef')
+        const chefIds = (chefsAgence || []).map(c => c.id)
+        if (chefIds.length > 0) {
+          const { count: fichesChefs } = await supabase.from('fiches_journalieres')
+            .select('*', { count: 'exact', head: true })
+            .eq('valide_chef', false).in('agent_id', chefIds)
+          if ((fichesChefs || 0) > 0) {
+            al.push({ type: 'warning', message: `👨‍💼 ${fichesChefs} fiche(s) de chef(s) à valider`, action: 'fiches' })
+          }
+        }
+    
+        setAlertesDash(al)
 
     // Evolution 6 mois
     const evolution = []
@@ -345,23 +364,31 @@ export default function DashboardResponsable() {
 
   async function loadFiches(resp?: any) {
     const r = resp || responsable
-    if (!r?.agence_id) return
-    const { data: agentsAgence } = await supabase.from('agents').select('id').eq('agence_id', r.agence_id)
+    if (!r?.agence_id) { setFiches([]); return }
+
+    const { data: agentsAgence, error: errAgents } = await supabase
+      .from('agents').select('id, role').eq('agence_id', r.agence_id).neq('role', 'admin')
+
+    if (errAgents) { console.error('loadFiches agents:', errAgents); setFiches([]); return }
+
     const agentIds = (agentsAgence || []).map(a => a.id)
     if (agentIds.length === 0) { setFiches([]); return }
-    const { data } = await supabase
-  .from('fiches_journalieres')
-  .select(`
-    *,
-    agents!inner(nom, prenom, agence_id, agences(nom)),
-    reactivations(*),
-    augmentations_mise(*),
-    assurances_details(*)
-  `)
-  .in('agent_id', agentIds)
-  .order('date', { ascending: false })
-  .limit(100)
-    setFiches(data || [])
+
+    const { data, error } = await supabase
+      .from('fiches_journalieres')
+      .select(`
+        *,
+        agents!inner(id, nom, prenom, role, agence_id, agences(nom)),
+        reactivations(*),
+        augmentations_mise(*),
+        assurances_details(*)
+      `)
+      .in('agent_id', agentIds)
+      .order('date', { ascending: false })
+      .limit(200)
+
+    if (error) { console.error('loadFiches fiches:', error); setFiches([]); return }
+    setFiches((data || []).filter(Boolean))
   }
 
   async function validerFicheResponsable(ficheId: string, statut: string, commentaire?: string) {
@@ -1042,12 +1069,13 @@ export default function DashboardResponsable() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-5 gap-3">
                   {[
                     { label: 'Total', value: fiches.length, bg: '#EEF2FF', color: '#2A4E94' },
                     { label: 'Validées', value: fiches.filter(f => f.statut_validation === 'validee').length, bg: '#F0FDF4', color: '#166534' },
                     { label: 'Rejetées', value: fiches.filter(f => f.statut_validation === 'rejetee').length, bg: '#FEF2F2', color: '#991B1B' },
-                    { label: 'En attente', value: fiches.filter(f => !f.statut_validation || f.statut_validation === 'en_attente').length, bg: '#FEF9C3', color: '#854D0E' },
+                    { label: 'À valider', value: fiches.filter(f => !f.statut_validation || f.statut_validation === 'en_attente' || f.statut_validation === 'a_corriger').length, bg: '#FEF9C3', color: '#854D0E' },
+                    { label: '👨‍💼 Chefs à valider', value: fiches.filter(f => f.agents?.role === 'chef' && (!f.statut_validation || f.statut_validation === 'en_attente' || f.statut_validation === 'a_corriger')).length, bg: '#FEF3C7', color: '#B45309' },
                   ].map(s => (
                     <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 text-center">
                       <div className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</div>
@@ -1071,14 +1099,20 @@ export default function DashboardResponsable() {
                     <option value="a_corriger">🔄 À corriger</option>
                     <option value="en_attente">⏳ En attente</option>
                   </select>
+                  <select value={ficheFilterRole} onChange={e => setFicheFilterRole(e.target.value)}
+                    className="px-3 py-2 rounded-xl border text-xs outline-none" style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
+                    <option value="tous">Tous les rôles</option>
+                    <option value="agent">👤 Agents</option>
+                    <option value="chef">👨‍💼 Chefs</option>
+                  </select>
                 </div>
 
                 <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
                   <div className="overflow-y-auto" style={{ maxHeight: '55vh' }}>
-                    <table className="w-full">
+                  <table className="w-full">
                       <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
                         <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                          {['Date', 'Agent', 'SMART', 'Écart', 'Statut', 'Actions'].map(h => (
+                          {['Date', 'Agent', 'Rôle', 'SMART', 'Caisse', 'Écart', 'Statut', 'Actions'].map(h => (
                             <th key={h} className="text-left px-3 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
                           ))}
                         </tr>
@@ -1086,16 +1120,22 @@ export default function DashboardResponsable() {
                       <tbody>
                         {fiches.filter(f => {
                           const ms = ficheSearch === '' || `${f.agents?.prenom} ${f.agents?.nom}`.toLowerCase().includes(ficheSearch.toLowerCase())
-                          const mst = ficheFilterStatut === 'tous' || f.statut_validation === ficheFilterStatut
+                          const mst = ficheFilterStatut === 'tous' || (f.statut_validation || 'en_attente') === ficheFilterStatut
                           const md = ficheFilterDate === '' || f.date === ficheFilterDate
-                          return ms && mst && md
+                          const mr = ficheFilterRole === 'tous' || f.agents?.role === ficheFilterRole
+                          return ms && mst && md && mr
                         }).map((f, i, arr) => {
                           const ecart = getEcart(f)
                           const isManquant = ecart > 0
+                          const estChef = f.agents?.role === 'chef'
+                          const peutValider = !f.statut_validation || f.statut_validation === 'en_attente' || f.statut_validation === 'a_corriger'
                           return (
                             <tr key={f.id} onClick={() => setSelectedFiche(f)}
                               className="cursor-pointer hover:bg-gray-50 transition-colors"
-                              style={{ borderBottom: i < arr.length - 1 ? '1px solid #f8fafc' : 'none', backgroundColor: selectedFiche?.id === f.id ? '#EEF2FF' : undefined }}>
+                              style={{
+                                borderBottom: i < arr.length - 1 ? '1px solid #f8fafc' : 'none',
+                                backgroundColor: selectedFiche?.id === f.id ? '#EEF2FF' : peutValider && estChef ? '#FFFBEB' : undefined
+                              }}>
                               <td className="px-3 py-3">
                                 <div className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
                                   {new Date(f.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
@@ -1103,14 +1143,29 @@ export default function DashboardResponsable() {
                               </td>
                               <td className="px-3 py-3">
                                 <div className="flex items-center gap-2">
-                                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0" style={{ backgroundColor: '#2A4E94' }}>
+                                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0"
+                                    style={{ backgroundColor: estChef ? '#854D0E' : '#2A4E94' }}>
                                     {f.agents?.prenom?.[0]}{f.agents?.nom?.[0]}
                                   </div>
-                                  <span className="text-xs font-medium" style={{ color: '#1a1a2e' }}>{f.agents?.prenom} {f.agents?.nom}</span>
+                                  <span className="text-xs font-medium" style={{ color: '#1a1a2e' }}>
+                                    {f.agents?.prenom} {f.agents?.nom}
+                                  </span>
                                 </div>
+                              </td>
+                              <td className="px-3 py-3">
+                                <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                                  style={{
+                                    backgroundColor: estChef ? '#FEF9C3' : '#EEF2FF',
+                                    color: estChef ? '#854D0E' : '#2A4E94'
+                                  }}>
+                                  {estChef ? '👨‍💼 Chef' : '👤 Agent'}
+                                </span>
                               </td>
                               <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#166534' }}>
                                 {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
+                              </td>
+                              <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#2A4E94' }}>
+                                {(f.montant_caisse ?? f.montant_rapporte ?? 0).toLocaleString()} F
                               </td>
                               <td className="px-3 py-3">
                                 {ecart !== 0 ? (
@@ -1125,25 +1180,43 @@ export default function DashboardResponsable() {
                               </td>
                               <td className="px-3 py-3">
                                 <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                  style={{ backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' : f.statut_validation === 'rejetee' ? '#FEE2E2' : f.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF', color: f.statut_validation === 'validee' ? '#166534' : f.statut_validation === 'rejetee' ? '#991B1B' : f.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94' }}>
+                                  style={{
+                                    backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' : f.statut_validation === 'rejetee' ? '#FEE2E2' : f.statut_validation === 'a_corriger' ? '#FEF9C3' : '#FEF3C7',
+                                    color: f.statut_validation === 'validee' ? '#166534' : f.statut_validation === 'rejetee' ? '#991B1B' : f.statut_validation === 'a_corriger' ? '#854D0E' : '#B45309'
+                                  }}>
                                   {f.statut_validation === 'validee' ? '✅' : f.statut_validation === 'rejetee' ? '❌' : f.statut_validation === 'a_corriger' ? '🔄' : '⏳'}
                                 </span>
                               </td>
                               <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
-                                {(!f.statut_validation || f.statut_validation === 'en_attente' || f.statut_validation === 'a_corriger') && (
+                                <div className="flex gap-1">
                                   <button type="button"
-                                    onClick={() => { setValidationFiche(f); setValidationStatut('validee'); setValidationCommentaire(''); setShowValidationModal(true) }}
-                                    className="px-2 py-1.5 rounded-lg text-xs font-semibold text-white"
-                                    style={{ backgroundColor: '#166534' }}>
-                                    Décider
-                                  </button>
-                                )}
+                                    onClick={() => setDetailFiche(f)}
+                                    className="p-1.5 rounded-lg" title="Voir les détails"
+                                    style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>👁️</button>
+                                  {peutValider && (
+                                    <button type="button"
+                                      onClick={() => { setValidationFiche(f); setValidationStatut('validee'); setValidationCommentaire(''); setShowValidationModal(true) }}
+                                      className="px-2 py-1.5 rounded-lg text-xs font-semibold text-white"
+                                      style={{ backgroundColor: '#166534' }}>
+                                      Décider
+                                    </button>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           )
                         })}
                       </tbody>
                     </table>
+                    {fiches.length === 0 && (
+                      <div className="p-12 text-center">
+                        <div className="text-4xl mb-3">📋</div>
+                        <div className="font-medium text-sm" style={{ color: '#1a1a2e' }}>Aucune fiche</div>
+                        <div className="text-xs mt-1" style={{ color: '#818387' }}>
+                          Vérifiez que les agents sont bien rattachés à votre agence
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1488,6 +1561,22 @@ export default function DashboardResponsable() {
         </div>
       </div>
 
+      {/* MODAL DÉTAIL FICHE */}
+      {detailFiche && (
+        <FicheDetailModal
+          fiche={detailFiche}
+          onClose={() => setDetailFiche(null)}
+          canValidate={!detailFiche.statut_validation || detailFiche.statut_validation === 'en_attente' || detailFiche.statut_validation === 'a_corriger'}
+          onValidate={() => {
+            setValidationFiche(detailFiche)
+            setValidationStatut('validee')
+            setValidationCommentaire('')
+            setDetailFiche(null)
+            setShowValidationModal(true)
+          }}
+        />
+      )}
+
       {/* MODAL VALIDATION FICHEpp */}
       {showValidationModal && validationFiche && (
         <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
@@ -1498,8 +1587,15 @@ export default function DashboardResponsable() {
             </div>
             <div className="p-6 space-y-5">
               <div className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
-                <div className="text-xs font-semibold" style={{ color: '#1a1a2e' }}>
+              <div className="text-xs font-semibold flex items-center gap-2" style={{ color: '#1a1a2e' }}>
                   {validationFiche.agents?.prenom} {validationFiche.agents?.nom}
+                  <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                    style={{
+                      backgroundColor: validationFiche.agents?.role === 'chef' ? '#FEF9C3' : '#EEF2FF',
+                      color: validationFiche.agents?.role === 'chef' ? '#854D0E' : '#2A4E94'
+                    }}>
+                    {validationFiche.agents?.role === 'chef' ? '👨‍💼 Chef' : '👤 Agent'}
+                  </span>
                 </div>
                 <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
                   Fiche du {new Date(validationFiche.date).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
@@ -1572,6 +1668,8 @@ export default function DashboardResponsable() {
           </div>
         </div>
       )}
+
+
 
       {/* MODAL OBJECTIF */}
       {showObjectifModal && (
