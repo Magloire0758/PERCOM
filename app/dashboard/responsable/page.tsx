@@ -378,7 +378,7 @@ export default function DashboardResponsable() {
       .from('fiches_journalieres')
       .select(`
         *,
-        agents!inner(id, nom, prenom, role, agence_id, agences(nom)),
+        agents!fiches_journalieres_agent_id_fkey(id, nom, prenom, role, agence_id, agences(nom)),
         reactivations(*),
         augmentations_mise(*),
         assurances_details(*)
@@ -431,8 +431,8 @@ export default function DashboardResponsable() {
     const liste: any[] = []
     if (agentIds.length > 0) {
       const [{ data: manquantsData }, { data: fichesNV }, { count: enAttente }] = await Promise.all([
-        supabase.from('fiches_journalieres').select('*, agents!inner(nom, prenom, agences(nom))').eq('manquant_regle', false).in('agent_id', agentIds),
-        supabase.from('fiches_journalieres').select('*, agents!inner(nom, prenom, agences(nom))').eq('valide_chef', false).lt('date', today).in('agent_id', agentIds),
+        supabase.from('fiches_journalieres').select('*, agents!fiches_journalieres_agent_id_fkey(nom, prenom, role, agences(nom))').eq('manquant_regle', false).in('agent_id', agentIds),
+        supabase.from('fiches_journalieres').select('*, agents!fiches_journalieres_agent_id_fkey(nom, prenom, role, agences(nom))').eq('valide_chef', false).lt('date', today).in('agent_id', agentIds),
         supabase.from('agents').select('*', { count: 'exact', head: true }).eq('agence_id', responsable.agence_id).eq('statut', 'en_attente'),
       ])
 
@@ -464,7 +464,7 @@ export default function DashboardResponsable() {
     const agentIds = (agentsAgence || []).map(a => a.id)
     if (agentIds.length === 0) { setManquants([]); return }
     const { data } = await supabase.from('fiches_journalieres')
-      .select('*, agents!inner(nom, prenom, agence_id, telephone, agences(nom))')
+    .select('*, agents!fiches_journalieres_agent_id_fkey(nom, prenom, role, agence_id, telephone, agences(nom))')
       .in('agent_id', agentIds).order('date', { ascending: false })
       setManquants((data || []).filter(f => getEcart(f) !== 0))
   }

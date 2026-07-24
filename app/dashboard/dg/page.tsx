@@ -378,21 +378,21 @@ export default function DashboardDG() {
       .from('fiches_journalieres')
       .select(`
         *,
-        agents!inner(nom, prenom, agence_id, agences(nom)),
+        agents!fiches_journalieres_agent_id_fkey(nom, prenom, role, agence_id, agences(nom)),
         reactivations(*),
         augmentations_mise(*),
         assurances_details(*)
       `)
       .order('date', { ascending: false })
       .limit(100)
-    setFiches(data || [])
+      setFiches((data || []).filter(Boolean))
   }
 
   async function loadAlertes() {
     setAlertesLoading(true)
     const [{ data: manquantsData }, { data: fichesNonValidees }, { count: enAttente }] = await Promise.all([
-      supabase.from('fiches_journalieres').select('*, agents!inner(nom, prenom, agences(nom))').eq('manquant_regle', false),
-      supabase.from('fiches_journalieres').select('*, agents!inner(nom, prenom, agences(nom))').eq('valide_chef', false).lt('date', today),
+      supabase.from('fiches_journalieres').select('*, agents!fiches_journalieres_agent_id_fkey(nom, prenom, role, agences(nom))').eq('manquant_regle', false),
+      supabase.from('fiches_journalieres').select('*, agents!fiches_journalieres_agent_id_fkey(nom, prenom, role, agences(nom))').eq('valide_chef', false).lt('date', today),
       supabase.from('agents').select('*', { count: 'exact', head: true }).eq('statut', 'en_attente'),
     ])
     const liste: any[] = []
@@ -419,7 +419,7 @@ export default function DashboardDG() {
 
   async function loadManquants() {
     const { data } = await supabase.from('fiches_journalieres')
-      .select('*, agents!inner(nom, prenom, agence_id, telephone, agences(nom))')
+    .select('*, agents!fiches_journalieres_agent_id_fkey(nom, prenom, role, agence_id, telephone, agences(nom))')
       .order('date', { ascending: false })
       setManquants((data || []).filter(f => getEcart(f) !== 0))
   }

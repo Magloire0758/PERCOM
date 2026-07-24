@@ -13,7 +13,10 @@ export default function FicheDetail({
 }: FicheDetailProps) {
 
   if (!fiche) return null    
-  
+
+
+
+
   const card = isDark ? '#1e293b' : 'white'
   const text = isDark ? '#f1f5f9' : '#1a1a2e'
   const sub = isDark ? '#94a3b8' : '#818387'
