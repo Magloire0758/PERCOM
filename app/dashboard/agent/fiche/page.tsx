@@ -2,19 +2,10 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useRouter } from 'next/navigation'
-
-interface Agent {
-  id: string
-  user_id: string
-  prenom: string
-  nom: string
-  equipe_id: string
-  agence_id: string
-  [key: string]: any
-}
+import { useRouter, useSearchParams } from 'next/navigation'
 
 interface Reactivation {
+  id?: string
   n_client: string
   nom_prenom: string
   produit: string
@@ -26,6 +17,7 @@ interface Reactivation {
 }
 
 interface AugmentationMise {
+  id?: string
   nom_client: string
   ancienne_mise: string
   nouvelle_mise: string
@@ -38,23 +30,31 @@ interface AssuranceDetail {
   montant: string
 }
 
+const MAX_JOURS_RETRO = 10
+
 export default function FicheJournaliere() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+
+  const dateParam = searchParams.get('date')
+  const editParam = searchParams.get('edit')
+
   const [loading, setLoading] = useState(false)
-  const [agent, setAgent] = useState<Agent | null>(null)
-  const [ficheDuJour, setFicheDuJour] = useState<any>(null)
+  const [initLoading, setInitLoading] = useState(true)
+  const [agent, setAgent] = useState<any>(null)
+  const [ficheExistante, setFicheExistante] = useState<any>(null)
+  const [erreurAcces, setErreurAcces] = useState('')
+  const [submitted, setSubmitted] = useState(false)
+
+  // Mode
+  const isEdit = !!editParam
+  const [dateFiche, setDateFiche] = useState<string>('')
+
   const [sectionsOuvertes, setSectionsOuvertes] = useState({
-    comptes: true,
-    montants: true,
-    activites: true,
-    depots: false,
-    reactivations: false,
-    augmentations: false,
-    assurances: false,
-    pieces: false,
+    comptes: true, montants: true, activites: true,
+    depots: false, reactivations: false, augmentations: false, assurances: false,
   })
 
-  // Formulaire principal
   const [form, setForm] = useState({
     comptes_ouverts_dat: '',
     montant_smart: '',
@@ -69,94 +69,150 @@ export default function FicheJournaliere() {
     observations: '',
   })
 
-  // Réactivations (lignes dynamiques)
   const [reactivations, setReactivations] = useState<Reactivation[]>([])
-
-  // Augmentations de mise (lignes dynamiques)
   const [augmentations, setAugmentations] = useState<AugmentationMise[]>([])
-
-  // Assurances (Honaméto + Akofa)
   const [assurances, setAssurances] = useState<AssuranceDetail[]>([
     { type_assurance: 'Honaméto', nb: '', montant: '' },
     { type_assurance: 'Akofa', nb: '', montant: '' },
   ])
 
-  // Pièces jointes
-  const [files, setFiles] = useState<File[]>([])
-
   const today = new Date().toISOString().split('T')[0]
+  const dateMin = (() => {
+    const d = new Date()
+    d.setDate(d.getDate() - MAX_JOURS_RETRO)
+    return d.toISOString().split('T')[0]
+  })()
 
-  // Calculs automatiques
-
-
-  // Calculs automatiques
+  // Calculs
   const montantSmart = parseFloat(form.montant_smart) || 0
   const montantCaisse = parseFloat(form.montant_caisse) || 0
   const ecart = montantSmart - montantCaisse
   const typeEcart = ecart > 0 ? 'manquant' : ecart < 0 ? 'surplus' : 'ok'
   const totalAutresDepots = (parseFloat(form.montant_depot_pe) || 0) + (parseFloat(form.montant_depot_dat) || 0) + (parseFloat(form.montant_depot_dav) || 0)
   const totalReactivations = reactivations.reduce((s, r) => s + (parseFloat(r.montant_cotise) || 0), 0)
-  const totalAugmentations = augmentations.length
   const totalAssurancesNb = assurances.reduce((s, a) => s + (parseInt(a.nb) || 0), 0)
   const totalAssurancesMontant = assurances.reduce((s, a) => s + (parseFloat(a.montant) || 0), 0)
 
-  useEffect(() => { loadAgent() }, [])
+  useEffect(() => { init() }, [])
 
-  async function loadAgent() {
+  async function init() {
+    setInitLoading(true)
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { router.push('/login'); return }
-    const { data } = await supabase.from('agents').select('*').eq('user_id', user.id).single()
-    if (!data) return
-    setAgent(data)
-    const { data: fiche } = await supabase.from('fiches_journalieres')
-      .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
-      .eq('agent_id', data.id).eq('date', today).maybeSingle()
-    if (fiche) setFicheDuJour(fiche)
+    const { data: a } = await supabase.from('agents').select('*').eq('user_id', user.id).single()
+    if (!a) { router.push('/login'); return }
+    setAgent(a)
+
+    // ── MODE ÉDITION ──
+    if (editParam) {
+      const { data: f } = await supabase.from('fiches_journalieres')
+        .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
+        .eq('id', editParam).eq('agent_id', a.id).maybeSingle()
+
+      if (!f) { setErreurAcces('Fiche introuvable.'); setInitLoading(false); return }
+      if (f.statut_validation === 'validee') {
+        setErreurAcces('Cette fiche est déjà validée et ne peut plus être modifiée.')
+        setInitLoading(false); return
+      }
+
+      setDateFiche(f.date)
+      setForm({
+        comptes_ouverts_dat: String(f.comptes_ouverts_dat ?? f.comptes_ouverts ?? ''),
+        montant_smart: String(f.montant_smart ?? f.montant_mobilise ?? ''),
+        montant_caisse: String(f.montant_caisse ?? f.montant_rapporte ?? ''),
+        commission_jour: String(f.commission_jour ?? ''),
+        nb_clients_parcourus: String(f.nb_clients_parcourus ?? ''),
+        nb_adhesions: String(f.nb_adhesions ?? ''),
+        nb_abonnements_lyde_cash: String(f.nb_abonnements_lyde_cash ?? ''),
+        montant_depot_pe: String(f.montant_depot_pe ?? ''),
+        montant_depot_dat: String(f.montant_depot_dat ?? ''),
+        montant_depot_dav: String(f.montant_depot_dav ?? ''),
+        observations: f.observations ?? '',
+      })
+      setReactivations((f.reactivations || []).map((r: any) => ({
+        n_client: r.n_client ?? '', nom_prenom: r.nom_prenom ?? '', produit: r.produit ?? 'TONTINE',
+        mise: String(r.mise ?? ''), nouvelle_mise: String(r.nouvelle_mise ?? ''),
+        montant_cotise: String(r.montant_cotise ?? ''), reactif: r.reactif ?? true,
+        commentaire: r.commentaire ?? '',
+      })))
+      setAugmentations((f.augmentations_mise || []).map((x: any) => ({
+        nom_client: x.nom_client ?? '', ancienne_mise: String(x.ancienne_mise ?? ''),
+        nouvelle_mise: String(x.nouvelle_mise ?? ''), motif: x.motif ?? 'EPARGNE',
+      })))
+      const hona = (f.assurances_details || []).find((x: any) => x.type_assurance === 'Honaméto')
+      const akofa = (f.assurances_details || []).find((x: any) => x.type_assurance === 'Akofa')
+      setAssurances([
+        { type_assurance: 'Honaméto', nb: String(hona?.nb ?? ''), montant: String(hona?.montant ?? '') },
+        { type_assurance: 'Akofa', nb: String(akofa?.nb ?? ''), montant: String(akofa?.montant ?? '') },
+      ])
+      if ((f.reactivations || []).length > 0) setSectionsOuvertes(p => ({ ...p, reactivations: true }))
+      if ((f.augmentations_mise || []).length > 0) setSectionsOuvertes(p => ({ ...p, augmentations: true }))
+      setInitLoading(false)
+      return
+    }
+
+    // ── MODE CRÉATION (jour ou antérieure) ──
+    const cible = dateParam || today
+
+    if (cible > today) {
+      setErreurAcces('Impossible de créer une fiche pour une date future.')
+      setInitLoading(false); return
+    }
+    if (cible < dateMin) {
+      setErreurAcces(`Vous ne pouvez pas remonter au-delà de ${MAX_JOURS_RETRO} jours.`)
+      setInitLoading(false); return
+    }
+
+    setDateFiche(cible)
+
+    const { data: existante } = await supabase.from('fiches_journalieres')
+      .select('id, statut_validation').eq('agent_id', a.id).eq('date', cible).maybeSingle()
+
+    if (existante) {
+      if (existante.statut_validation === 'validee') {
+        setFicheExistante(existante)
+        setErreurAcces('Une fiche validée existe déjà pour cette date.')
+        setInitLoading(false); return
+      }
+      // Redirection vers modification
+      router.replace(`/dashboard/agent/fiche?edit=${existante.id}`)
+      return
+    }
+
+    setInitLoading(false)
   }
 
   function toggleSection(key: keyof typeof sectionsOuvertes) {
     setSectionsOuvertes(p => ({ ...p, [key]: !p[key] }))
   }
 
-  // ── Réactivations ──
   function ajouterReactivation() {
     setReactivations(prev => [...prev, {
       n_client: '', nom_prenom: '', produit: 'TONTINE',
-      mise: '', nouvelle_mise: '', montant_cotise: '',
-      reactif: true, commentaire: ''
+      mise: '', nouvelle_mise: '', montant_cotise: '', reactif: true, commentaire: ''
     }])
     if (!sectionsOuvertes.reactivations) toggleSection('reactivations')
   }
-
-  function updateReactivation(index: number, field: keyof Reactivation, value: string | boolean) {
-    setReactivations(prev => prev.map((r, i) => i === index ? { ...r, [field]: value } : r))
+  function updateReactivation(i: number, field: keyof Reactivation, v: string | boolean) {
+    setReactivations(prev => prev.map((r, idx) => idx === i ? { ...r, [field]: v } : r))
+  }
+  function supprimerReactivation(i: number) {
+    setReactivations(prev => prev.filter((_, idx) => idx !== i))
   }
 
-  function supprimerReactivation(index: number) {
-    setReactivations(prev => prev.filter((_, i) => i !== index))
-  }
-
-  // ── Augmentations ──
   function ajouterAugmentation() {
     setAugmentations(prev => [...prev, { nom_client: '', ancienne_mise: '', nouvelle_mise: '', motif: 'EPARGNE' }])
     if (!sectionsOuvertes.augmentations) toggleSection('augmentations')
   }
-
-  function updateAugmentation(index: number, field: keyof AugmentationMise, value: string) {
-    setAugmentations(prev => prev.map((a, i) => i === index ? { ...a, [field]: value } : a))
+  function updateAugmentation(i: number, field: keyof AugmentationMise, v: string) {
+    setAugmentations(prev => prev.map((a, idx) => idx === i ? { ...a, [field]: v } : a))
+  }
+  function supprimerAugmentation(i: number) {
+    setAugmentations(prev => prev.filter((_, idx) => idx !== i))
   }
 
-  function supprimerAugmentation(index: number) {
-    setAugmentations(prev => prev.filter((_, i) => i !== index))
-  }
-
-  // ── Assurances ──
-  function updateAssurance(index: number, field: keyof AssuranceDetail, value: string) {
-    setAssurances(prev => prev.map((a, i) => i === index ? { ...a, [field]: value } : a))
-  }
-
-  function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    if (e.target.files) setFiles(Array.from(e.target.files))
+  function updateAssurance(i: number, field: keyof AssuranceDetail, v: string) {
+    setAssurances(prev => prev.map((a, idx) => idx === i ? { ...a, [field]: v } : a))
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -164,200 +220,129 @@ export default function FicheJournaliere() {
     if (!agent) return
     setLoading(true)
 
-    // 1. Créer la fiche principale
-    const { data: fiche, error } = await supabase
-      .from('fiches_journalieres')
-      .insert({
-        agent_id: agent.id,
-        equipe_id: agent.equipe_id || null,
-        date: today,
-        heure_soumission: new Date().toISOString(),
-        // Comptes
-        comptes_ouverts_dat: parseInt(form.comptes_ouverts_dat) || 0,
-        comptes_ouverts: parseInt(form.comptes_ouverts_dat) || 0, // compatibilité
-        // Montants
-        montant_smart: montantSmart,
-        montant_caisse: montantCaisse,
-        montant_mobilise: montantSmart,      // théorique terrain
-        montant_rapporte: montantCaisse,     // effectivement rapporté
-        commission_jour: parseFloat(form.commission_jour) || 0,
-        // Activités
-        nb_clients_parcourus: parseInt(form.nb_clients_parcourus) || 0,
-        nb_adhesions: parseInt(form.nb_adhesions) || 0,
-        nb_abonnements_lyde_cash: parseInt(form.nb_abonnements_lyde_cash) || 0,
-        // Autres dépôts
-        montant_depot_pe: parseFloat(form.montant_depot_pe) || 0,
-        montant_depot_dat: parseFloat(form.montant_depot_dat) || 0,
-        montant_depot_dav: parseFloat(form.montant_depot_dav) || 0,
-        // Observations
-        observations: form.observations || null,
-        // Statut
-        statut_validation: 'en_attente',
-        valide_chef: false,
-        manquant_regle: false,
-      })
-      .select()
-      .single()
-
-    if (error) { setLoading(false); alert('Erreur: ' + error.message); return }
-
-    // 2. Insérer réactivations
-    if (reactivations.length > 0) {
-      const reactivationsData = reactivations
-        .filter(r => r.nom_prenom.trim() !== '')
-        .map(r => ({
-          fiche_id: fiche.id,
-          agent_id: agent.id,
-          n_client: r.n_client || null,
-          nom_prenom: r.nom_prenom,
-          produit: r.produit || 'TONTINE',
-          mise: parseFloat(r.mise) || 0,
-          nouvelle_mise: parseFloat(r.nouvelle_mise) || 0,
-          montant_cotise: parseFloat(r.montant_cotise) || 0,
-          reactif: r.reactif,
-          commentaire: r.commentaire || null,
-        }))
-      if (reactivationsData.length > 0) {
-        await supabase.from('reactivations').insert(reactivationsData)
-      }
+    const payload = {
+      agent_id: agent.id,
+      equipe_id: agent.equipe_id || null,
+      date: dateFiche,
+      heure_soumission: new Date().toISOString(),
+      comptes_ouverts_dat: parseInt(form.comptes_ouverts_dat) || 0,
+      comptes_ouverts: parseInt(form.comptes_ouverts_dat) || 0,
+      montant_smart: montantSmart,
+      montant_caisse: montantCaisse,
+      montant_mobilise: montantSmart,
+      montant_rapporte: montantCaisse,
+      commission_jour: parseFloat(form.commission_jour) || 0,
+      nb_clients_parcourus: parseInt(form.nb_clients_parcourus) || 0,
+      nb_adhesions: parseInt(form.nb_adhesions) || 0,
+      nb_abonnements_lyde_cash: parseInt(form.nb_abonnements_lyde_cash) || 0,
+      montant_depot_pe: parseFloat(form.montant_depot_pe) || 0,
+      montant_depot_dat: parseFloat(form.montant_depot_dat) || 0,
+      montant_depot_dav: parseFloat(form.montant_depot_dav) || 0,
+      observations: form.observations || null,
+      statut_validation: 'en_attente',
+      valide_chef: false,
+      commentaire_chef: null,
+      valide_par: null,
     }
 
-    // 3. Insérer augmentations de mise
-    if (augmentations.length > 0) {
-      const augmentationsData = augmentations
-        .filter(a => a.nom_client.trim() !== '')
-        .map(a => ({
-          fiche_id: fiche.id,
-          agent_id: agent.id,
-          nom_client: a.nom_client,
-          ancienne_mise: parseFloat(a.ancienne_mise) || 0,
-          nouvelle_mise: parseFloat(a.nouvelle_mise) || 0,
-          motif: a.motif || 'EPARGNE',
-        }))
-      if (augmentationsData.length > 0) {
-        await supabase.from('augmentations_mise').insert(augmentationsData)
-      }
+    let ficheId = editParam
+
+    if (isEdit) {
+      const { error } = await supabase.from('fiches_journalieres').update(payload).eq('id', editParam)
+      if (error) { setLoading(false); alert('Erreur : ' + error.message); return }
+      // Purge des sous-tables
+      await Promise.all([
+        supabase.from('reactivations').delete().eq('fiche_id', editParam),
+        supabase.from('augmentations_mise').delete().eq('fiche_id', editParam),
+        supabase.from('assurances_details').delete().eq('fiche_id', editParam),
+      ])
+    } else {
+      const { data, error } = await supabase.from('fiches_journalieres')
+        .insert({ ...payload, manquant_regle: false }).select().single()
+      if (error) { setLoading(false); alert('Erreur : ' + error.message); return }
+      ficheId = data.id
     }
 
-    // 4. Insérer assurances
-    const assurancesData = assurances
-      .filter(a => (parseInt(a.nb) || 0) > 0)
-      .map(a => ({
-        fiche_id: fiche.id,
-        agent_id: agent.id,
-        type_assurance: a.type_assurance,
-        nb: parseInt(a.nb) || 0,
-        montant: parseFloat(a.montant) || 0,
-      }))
-    if (assurancesData.length > 0) {
-      await supabase.from('assurances_details').insert(assurancesData)
-    }
+    // Réinsertion des sous-tables
+    const reactData = reactivations.filter(r => r.nom_prenom.trim() !== '').map(r => ({
+      fiche_id: ficheId, agent_id: agent.id,
+      n_client: r.n_client || null, nom_prenom: r.nom_prenom, produit: r.produit || 'TONTINE',
+      mise: parseFloat(r.mise) || 0, nouvelle_mise: parseFloat(r.nouvelle_mise) || 0,
+      montant_cotise: parseFloat(r.montant_cotise) || 0, reactif: r.reactif,
+      commentaire: r.commentaire || null,
+    }))
+    if (reactData.length > 0) await supabase.from('reactivations').insert(reactData)
 
-    // 5. Upload pièces jointes
-    for (const file of files) {
-      const path = `${agent.id}/${today}/${file.name}`
-      const { data: upload } = await supabase.storage.from('fiches-jointes').upload(path, file, { upsert: true })
-      if (upload) {
-        const { data: urlData } = supabase.storage.from('fiches-jointes').getPublicUrl(path)
-        await supabase.from('pieces_jointes').insert({
-          fiche_id: fiche.id, agent_id: agent.id,
-          nom_fichier: file.name, url: urlData.publicUrl,
-          type_fichier: file.type, taille: file.size,
-        })
-      }
-    }
+    const augData = augmentations.filter(a => a.nom_client.trim() !== '').map(a => ({
+      fiche_id: ficheId, agent_id: agent.id,
+      nom_client: a.nom_client, ancienne_mise: parseFloat(a.ancienne_mise) || 0,
+      nouvelle_mise: parseFloat(a.nouvelle_mise) || 0, motif: a.motif || 'EPARGNE',
+    }))
+    if (augData.length > 0) await supabase.from('augmentations_mise').insert(augData)
+
+    const assurData = assurances.filter(a => (parseInt(a.nb) || 0) > 0).map(a => ({
+      fiche_id: ficheId, agent_id: agent.id,
+      type_assurance: a.type_assurance, nb: parseInt(a.nb) || 0, montant: parseFloat(a.montant) || 0,
+    }))
+    if (assurData.length > 0) await supabase.from('assurances_details').insert(assurData)
 
     setLoading(false)
-    setFicheDuJour(fiche)
+    setSubmitted(true)
   }
 
-  // ── Fiche déjà soumise ──
-  if (ficheDuJour) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4" style={{ backgroundColor: '#f8fafc' }}>
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 w-full max-w-md">
-          <div className="text-center mb-6">
-            <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style={{ backgroundColor: '#EEF2FF' }}>
-              <span className="text-3xl">✅</span>
-            </div>
-            <h2 className="text-xl font-bold mb-1" style={{ color: '#2A4E94' }}>Fiche soumise ✅</h2>
-            <p className="text-sm" style={{ color: '#818387' }}>
-              {new Date(today).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
-            </p>
-          </div>
-
-          {/* Résumé */}
-          <div className="space-y-3 mb-6">
-            {/* Montants */}
-            <div className="rounded-2xl p-4" style={{ backgroundColor: '#f8fafc' }}>
-              <div className="text-xs font-semibold mb-2" style={{ color: '#818387' }}>💰 MONTANTS</div>
-              <div className="grid grid-cols-2 gap-2">
-              {[
-                  { label: 'SMART', value: (ficheDuJour.montant_smart || 0).toLocaleString() + ' F' },
-                  { label: 'Caisse', value: (ficheDuJour.montant_caisse || 0).toLocaleString() + ' F' },
-                  { label: 'Commission', value: (ficheDuJour.commission_jour || 0).toLocaleString() + ' F' },
-                  { label: (() => { const e = (ficheDuJour.montant_smart || 0) - (ficheDuJour.montant_caisse || 0); return e > 0 ? '⚠️ Manquant' : e < 0 ? '🔵 Surplus' : '✅ Écart' })(), value: Math.abs((ficheDuJour.montant_smart || 0) - (ficheDuJour.montant_caisse || 0)).toLocaleString() + ' F' },
-                ].map(item => (
-                  <div key={item.label} className="rounded-xl p-2" style={{ backgroundColor: 'white' }}>
-                    <div className="text-xs" style={{ color: '#818387' }}>{item.label}</div>
-                    <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{item.value}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Activités */}
-            <div className="rounded-2xl p-4" style={{ backgroundColor: '#f8fafc' }}>
-              <div className="text-xs font-semibold mb-2" style={{ color: '#818387' }}>📊 ACTIVITÉS</div>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { label: 'Comptes DAT', value: ficheDuJour.comptes_ouverts_dat || 0 },
-                  { label: 'Adhésions', value: ficheDuJour.nb_adhesions || 0 },
-                  { label: 'Lydé Cash', value: ficheDuJour.nb_abonnements_lyde_cash || 0 },
-                  { label: 'Clients', value: ficheDuJour.nb_clients_parcourus || 0 },
-                  { label: 'Réactivations', value: ficheDuJour.reactivations?.length || 0 },
-                  { label: 'Augm. mise', value: ficheDuJour.augmentations_mise?.length || 0 },
-                ].map(item => (
-                  <div key={item.label} className="rounded-xl p-2 text-center" style={{ backgroundColor: 'white' }}>
-                    <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{item.value}</div>
-                    <div className="text-xs" style={{ color: '#818387' }}>{item.label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Statut validation */}
-            <div className="rounded-xl p-3 text-center"
-              style={{
-                backgroundColor: ficheDuJour.statut_validation === 'validee' ? '#F0FDF4' :
-                  ficheDuJour.statut_validation === 'rejetee' ? '#FEF2F2' : '#EEF2FF',
-              }}>
-              <span className="text-sm font-medium"
-                style={{
-                  color: ficheDuJour.statut_validation === 'validee' ? '#166534' :
-                    ficheDuJour.statut_validation === 'rejetee' ? '#991B1B' : '#2A4E94'
-                }}>
-                {ficheDuJour.statut_validation === 'validee' ? '✅ Fiche validée' :
-                  ficheDuJour.statut_validation === 'rejetee' ? '❌ Fiche rejetée' :
-                  '⏳ En attente de validation'}
-              </span>
-              {ficheDuJour.commentaire_chef && (
-                <p className="text-xs mt-1" style={{ color: '#818387' }}>💬 {ficheDuJour.commentaire_chef}</p>
-              )}
-            </div>
-          </div>
-
-          <button onClick={() => router.push('/dashboard/agent')}
-            className="w-full py-3 rounded-xl text-white font-semibold text-sm"
-            style={{ backgroundColor: '#2A4E94' }}>
-            Retour au dashboard
-          </button>
-        </div>
+  // ── ÉTATS D'ATTENTE ──
+  if (initLoading) return (
+    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#f8fafc' }}>
+      <div className="text-center">
+        <div className="w-10 h-10 border-4 rounded-full animate-spin mx-auto mb-4"
+          style={{ borderColor: '#2A4E94', borderTopColor: 'transparent' }} />
+        <p className="text-sm" style={{ color: '#818387' }}>Chargement...</p>
       </div>
-    )
-  }
+    </div>
+  )
 
-  // ── Formulaire ──
+  if (erreurAcces) return (
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ backgroundColor: '#f8fafc' }}>
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 w-full max-w-md text-center">
+        <div className="text-5xl mb-4">🔒</div>
+        <h2 className="text-lg font-bold mb-2" style={{ color: '#991B1B' }}>Action impossible</h2>
+        <p className="text-sm mb-6" style={{ color: '#818387' }}>{erreurAcces}</p>
+        <button onClick={() => router.push('/dashboard/agent')}
+          className="w-full py-3 rounded-xl text-white font-semibold text-sm"
+          style={{ backgroundColor: '#2A4E94' }}>
+          Retour au dashboard
+        </button>
+      </div>
+    </div>
+  )
+
+  if (submitted) return (
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ backgroundColor: '#f8fafc' }}>
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 w-full max-w-md text-center">
+        <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
+          style={{ backgroundColor: '#F0FDF4' }}>
+          <span className="text-3xl">✅</span>
+        </div>
+        <h2 className="text-xl font-bold mb-1" style={{ color: '#166534' }}>
+          {isEdit ? 'Fiche modifiée !' : 'Fiche soumise !'}
+        </h2>
+        <p className="text-sm mb-6" style={{ color: '#818387' }}>
+          {new Date(dateFiche).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+          <br />
+          {isEdit ? 'Elle repart en validation.' : 'En attente de validation.'}
+        </p>
+        <button onClick={() => router.push('/dashboard/agent')}
+          className="w-full py-3 rounded-xl text-white font-semibold text-sm"
+          style={{ backgroundColor: '#2A4E94' }}>
+          Retour au dashboard
+        </button>
+      </div>
+    </div>
+  )
+
+  const estAnterieure = dateFiche !== today
+
+  // ── FORMULAIRE ──
   return (
     <div className="min-h-screen p-4" style={{ backgroundColor: '#f8fafc', fontFamily: 'var(--font-dm-sans)' }}>
       <div className="max-w-2xl mx-auto">
@@ -368,53 +353,57 @@ export default function FicheJournaliere() {
             className="flex items-center gap-2 text-sm mb-4" style={{ color: '#818387' }}>
             ← Retour
           </button>
-          <h1 className="text-2xl font-bold" style={{ color: '#2A4E94' }}>Fiche journalière</h1>
+          <h1 className="text-2xl font-bold" style={{ color: '#2A4E94' }}>
+            {isEdit ? '✏️ Modifier la fiche' : estAnterieure ? '📅 Fiche antérieure' : 'Fiche journalière'}
+          </h1>
           <p className="text-sm mt-1" style={{ color: '#818387' }}>
-            {new Date(today).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+            {new Date(dateFiche).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
             {agent && ` — ${agent.prenom} ${agent.nom}`}
           </p>
         </div>
 
+        {/* Bandeaux contextuels */}
+        {isEdit && (
+          <div className="mb-4 p-3 rounded-xl text-xs flex items-start gap-2"
+            style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
+            <span>⚠️</span>
+            <span>Après modification, cette fiche repartira en attente de validation.</span>
+          </div>
+        )}
+        {!isEdit && estAnterieure && (
+          <div className="mb-4 p-3 rounded-xl text-xs flex items-start gap-2"
+            style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+            <span>📅</span>
+            <span>Vous saisissez une fiche pour une date antérieure.</span>
+          </div>
+        )}
+
         <form onSubmit={handleSubmit} className="space-y-4">
 
-          {/* ── SECTION : Comptes ── */}
-          <SectionCard
-            titre="🏦 Comptes"
-            ouverte={sectionsOuvertes.comptes}
-            onToggle={() => toggleSection('comptes')}>
+          {/* Comptes */}
+          <SectionCard titre="🏦 Comptes" ouverte={sectionsOuvertes.comptes} onToggle={() => toggleSection('comptes')}>
             <Field label="Comptes ouverts (DAT)" objectif="≥ 6"
-  value={form.comptes_ouverts_dat}
-  onChange={v => setForm(p => ({ ...p, comptes_ouverts_dat: v }))}
-  type="number" placeholder="0" />
-
+              value={form.comptes_ouverts_dat}
+              onChange={v => setForm(p => ({ ...p, comptes_ouverts_dat: v }))}
+              type="number" placeholder="0" />
           </SectionCard>
 
-          {/* ── SECTION : Montants ── */}
-          <SectionCard
-            titre="💰 Montants collectés"
-            ouverte={sectionsOuvertes.montants}
-            onToggle={() => toggleSection('montants')}>
+          {/* Montants */}
+          <SectionCard titre="💰 Montants collectés" ouverte={sectionsOuvertes.montants} onToggle={() => toggleSection('montants')}>
             <div className="space-y-4">
-            <div className="p-3 rounded-xl text-xs" style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-                ℹ️ <strong>SMART</strong> = montant théorique collecté sur le terrain · <strong>Caisse</strong> = montant effectivement rapporté. L&apos;écart entre les deux constitue le manquant ou le surplus.
+              <div className="p-3 rounded-xl text-xs" style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                ℹ️ <strong>SMART</strong> = montant théorique collecté sur le terrain · <strong>Caisse</strong> = montant effectivement rapporté.
               </div>
               <div className="grid grid-cols-2 gap-4">
-              <Field label="Montant SMART (théorique)"
-                  value={form.montant_smart}
-                  onChange={v => setForm(p => ({ ...p, montant_smart: v }))}
-                  type="number" suffix="F" placeholder="0" />
-                <Field label="Montant Caisse (rapporté)"
-                  value={form.montant_caisse}
-                  onChange={v => setForm(p => ({ ...p, montant_caisse: v }))}
-                  type="number" suffix="F" placeholder="0" />
+                <Field label="Montant SMART (théorique)" value={form.montant_smart}
+                  onChange={v => setForm(p => ({ ...p, montant_smart: v }))} type="number" suffix="F" placeholder="0" />
+                <Field label="Montant Caisse (rapporté)" value={form.montant_caisse}
+                  onChange={v => setForm(p => ({ ...p, montant_caisse: v }))} type="number" suffix="F" placeholder="0" />
               </div>
-              <Field label="Commission du jour (FCFA)"
-                value={form.commission_jour}
-                onChange={v => setForm(p => ({ ...p, commission_jour: v }))}
-                type="number" suffix="F" placeholder="0" />
+              <Field label="Commission du jour (FCFA)" value={form.commission_jour}
+                onChange={v => setForm(p => ({ ...p, commission_jour: v }))} type="number" suffix="F" placeholder="0" />
 
-{/* Écart automatique */}
-{(montantSmart > 0 || montantCaisse > 0) && (
+              {(montantSmart > 0 || montantCaisse > 0) && (
                 <div className="rounded-xl p-4"
                   style={{
                     backgroundColor: typeEcart === 'ok' ? '#F0FDF4' : typeEcart === 'manquant' ? '#FEF2F2' : '#EEF2FF',
@@ -433,66 +422,34 @@ export default function FicheJournaliere() {
                   <div className="text-xs" style={{ color: '#818387' }}>
                     SMART {montantSmart.toLocaleString()} F − Caisse {montantCaisse.toLocaleString()} F
                   </div>
-                  {typeEcart === 'manquant' && (
-                    <div className="text-xs mt-1" style={{ color: '#991B1B' }}>
-                      Vous devez régulariser ce montant auprès de la caisse.
-                    </div>
-                  )}
-                  {typeEcart === 'surplus' && (
-                    <div className="text-xs mt-1" style={{ color: '#2A4E94' }}>
-                      Vous avez rapporté plus que le montant théorique.
-                    </div>
-                  )}
                 </div>
               )}
             </div>
           </SectionCard>
 
-          {/* ── SECTION : Activités ── */}
-          <SectionCard
-            titre="📋 Activités terrain"
-            ouverte={sectionsOuvertes.activites}
-            onToggle={() => toggleSection('activites')}>
+          {/* Activités */}
+          <SectionCard titre="📋 Activités terrain" ouverte={sectionsOuvertes.activites} onToggle={() => toggleSection('activites')}>
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Nb clients parcourus"
-                value={form.nb_clients_parcourus}
-                onChange={v => setForm(p => ({ ...p, nb_clients_parcourus: v }))}
-                type="number" placeholder="0" />
-              <Field label="Nb d'adhésions"
-                value={form.nb_adhesions}
-                onChange={v => setForm(p => ({ ...p, nb_adhesions: v }))}
-                type="number" placeholder="0" />
-              <Field label="Nb abonnements Lydé Cash"
-                value={form.nb_abonnements_lyde_cash}
-                onChange={v => setForm(p => ({ ...p, nb_abonnements_lyde_cash: v }))}
-                type="number" placeholder="0" />
+              <Field label="Nb clients parcourus" value={form.nb_clients_parcourus}
+                onChange={v => setForm(p => ({ ...p, nb_clients_parcourus: v }))} type="number" placeholder="0" />
+              <Field label="Nb d'adhésions" value={form.nb_adhesions}
+                onChange={v => setForm(p => ({ ...p, nb_adhesions: v }))} type="number" placeholder="0" />
+              <Field label="Nb abonnements Lydé Cash" value={form.nb_abonnements_lyde_cash}
+                onChange={v => setForm(p => ({ ...p, nb_abonnements_lyde_cash: v }))} type="number" placeholder="0" />
             </div>
           </SectionCard>
 
-          {/* ── SECTION : Autres dépôts ── */}
-          <SectionCard
-            titre="🏧 Autres dépôts"
+          {/* Autres dépôts */}
+          <SectionCard titre="🏧 Autres dépôts"
             badge={totalAutresDepots > 0 ? totalAutresDepots.toLocaleString() + ' F' : undefined}
-            ouverte={sectionsOuvertes.depots}
-            onToggle={() => toggleSection('depots')}>
+            ouverte={sectionsOuvertes.depots} onToggle={() => toggleSection('depots')}>
             <div className="space-y-4">
-              <div className="p-3 rounded-xl text-xs" style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-                ℹ️ Renseignez les montants par type : PE (Plan Épargne), DAT (Dépôt À Terme), DAV (Dépôt À Vue)
-              </div>
-              <div className="grid grid-cols-1 gap-4">
-                <Field label="Montant PE (Plan Épargne)"
-                  value={form.montant_depot_pe}
-                  onChange={v => setForm(p => ({ ...p, montant_depot_pe: v }))}
-                  type="number" suffix="F" placeholder="0" />
-                <Field label="Montant DAT (Dépôt À Terme)"
-                  value={form.montant_depot_dat}
-                  onChange={v => setForm(p => ({ ...p, montant_depot_dat: v }))}
-                  type="number" suffix="F" placeholder="0" />
-                <Field label="Montant DAV (Dépôt À Vue)"
-                  value={form.montant_depot_dav}
-                  onChange={v => setForm(p => ({ ...p, montant_depot_dav: v }))}
-                  type="number" suffix="F" placeholder="0" />
-              </div>
+              <Field label="Montant PE (Prêt Épargne)" value={form.montant_depot_pe}
+                onChange={v => setForm(p => ({ ...p, montant_depot_pe: v }))} type="number" suffix="F" placeholder="0" />
+              <Field label="Montant DAT (Dépôt À Terme)" value={form.montant_depot_dat}
+                onChange={v => setForm(p => ({ ...p, montant_depot_dat: v }))} type="number" suffix="F" placeholder="0" />
+              <Field label="Montant DAV (Dépôt À Vue)" value={form.montant_depot_dav}
+                onChange={v => setForm(p => ({ ...p, montant_depot_dav: v }))} type="number" suffix="F" placeholder="0" />
               {totalAutresDepots > 0 && (
                 <div className="rounded-xl p-3 flex items-center justify-between"
                   style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0' }}>
@@ -503,12 +460,10 @@ export default function FicheJournaliere() {
             </div>
           </SectionCard>
 
-          {/* ── SECTION : Réactivations ── */}
-          <SectionCard
-            titre="🔄 Réactivations"
+          {/* Réactivations */}
+          <SectionCard titre="🔄 Réactivations"
             badge={reactivations.length > 0 ? `${reactivations.length} client(s)` : undefined}
-            ouverte={sectionsOuvertes.reactivations}
-            onToggle={() => toggleSection('reactivations')}>
+            ouverte={sectionsOuvertes.reactivations} onToggle={() => toggleSection('reactivations')}>
             <div className="space-y-4">
               {reactivations.length === 0 ? (
                 <div className="text-center py-4 text-sm" style={{ color: '#818387' }}>
@@ -525,19 +480,11 @@ export default function FicheJournaliere() {
                           style={{ backgroundColor: '#FEE2E2', color: '#991B1B' }}>✕</button>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>N° Client</label>
-                          <input type="text" value={r.n_client}
-                            onChange={e => updateReactivation(i, 'n_client', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }} placeholder="Ex: 001" />
-                        </div>
+                        <SmallField label="N° Client" value={r.n_client} onChange={v => updateReactivation(i, 'n_client', v)} placeholder="Ex: 001" />
                         <div>
                           <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Produit</label>
-                          <select value={r.produit}
-                            onChange={e => updateReactivation(i, 'produit', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }}>
+                          <select value={r.produit} onChange={e => updateReactivation(i, 'produit', e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }}>
                             <option value="TONTINE">TONTINE</option>
                             <option value="EPARGNE">EPARGNE</option>
                             <option value="DAT">DAT</option>
@@ -545,33 +492,11 @@ export default function FicheJournaliere() {
                           </select>
                         </div>
                         <div className="col-span-2">
-                          <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Nom & Prénoms *</label>
-                          <input type="text" value={r.nom_prenom}
-                            onChange={e => updateReactivation(i, 'nom_prenom', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }} placeholder="Nom et prénoms du client" />
+                          <SmallField label="Nom & Prénoms *" value={r.nom_prenom} onChange={v => updateReactivation(i, 'nom_prenom', v)} placeholder="Nom et prénoms du client" />
                         </div>
-                        <div>
-                          <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Mise actuelle (F)</label>
-                          <input type="number" value={r.mise}
-                            onChange={e => updateReactivation(i, 'mise', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }} placeholder="0" />
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Nouvelle mise (F)</label>
-                          <input type="number" value={r.nouvelle_mise}
-                            onChange={e => updateReactivation(i, 'nouvelle_mise', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }} placeholder="0" />
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Montant cotisé (F)</label>
-                          <input type="number" value={r.montant_cotise}
-                            onChange={e => updateReactivation(i, 'montant_cotise', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }} placeholder="0" />
-                        </div>
+                        <SmallField label="Mise actuelle (F)" value={r.mise} onChange={v => updateReactivation(i, 'mise', v)} type="number" />
+                        <SmallField label="Nouvelle mise (F)" value={r.nouvelle_mise} onChange={v => updateReactivation(i, 'nouvelle_mise', v)} type="number" />
+                        <SmallField label="Montant cotisé (F)" value={r.montant_cotise} onChange={v => updateReactivation(i, 'montant_cotise', v)} type="number" />
                         <div>
                           <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Réactivé ?</label>
                           <div className="flex gap-2 mt-1">
@@ -582,51 +507,36 @@ export default function FicheJournaliere() {
                                 style={{
                                   backgroundColor: r.reactif === opt.v ? '#2A4E94' : '#f1f5f9',
                                   color: r.reactif === opt.v ? 'white' : '#818387'
-                                }}>
-                                {opt.l}
-                              </button>
+                                }}>{opt.l}</button>
                             ))}
                           </div>
                         </div>
                         <div className="col-span-2">
-                          <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Commentaire</label>
-                          <input type="text" value={r.commentaire}
-                            onChange={e => updateReactivation(i, 'commentaire', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }} placeholder="Optionnel" />
+                          <SmallField label="Commentaire" value={r.commentaire} onChange={v => updateReactivation(i, 'commentaire', v)} placeholder="Optionnel" />
                         </div>
                       </div>
                     </div>
                   ))}
                 </div>
               )}
-
               <button type="button" onClick={ajouterReactivation}
                 className="w-full py-2.5 rounded-xl text-sm font-semibold border-2 border-dashed"
                 style={{ borderColor: '#2A4E94', color: '#2A4E94', backgroundColor: 'transparent' }}>
                 ➕ Ajouter une réactivation
               </button>
-
               {reactivations.length > 0 && (
-                <div className="rounded-xl p-3 flex items-center justify-between"
-                  style={{ backgroundColor: '#EEF2FF' }}>
-                  <span className="text-xs font-medium" style={{ color: '#2A4E94' }}>
-                    Total montants cotisés
-                  </span>
-                  <span className="font-bold text-sm" style={{ color: '#2A4E94' }}>
-                    {totalReactivations.toLocaleString()} F
-                  </span>
+                <div className="rounded-xl p-3 flex items-center justify-between" style={{ backgroundColor: '#EEF2FF' }}>
+                  <span className="text-xs font-medium" style={{ color: '#2A4E94' }}>Total montants cotisés</span>
+                  <span className="font-bold text-sm" style={{ color: '#2A4E94' }}>{totalReactivations.toLocaleString()} F</span>
                 </div>
               )}
             </div>
           </SectionCard>
 
-          {/* ── SECTION : Augmentations de mise ── */}
-          <SectionCard
-            titre="📈 Augmentations de mise"
+          {/* Augmentations */}
+          <SectionCard titre="📈 Augmentations de mise"
             badge={augmentations.length > 0 ? `${augmentations.length} client(s)` : undefined}
-            ouverte={sectionsOuvertes.augmentations}
-            onToggle={() => toggleSection('augmentations')}>
+            ouverte={sectionsOuvertes.augmentations} onToggle={() => toggleSection('augmentations')}>
             <div className="space-y-4">
               {augmentations.length === 0 ? (
                 <div className="text-center py-4 text-sm" style={{ color: '#818387' }}>
@@ -637,39 +547,21 @@ export default function FicheJournaliere() {
                   {augmentations.map((a, i) => (
                     <div key={i} className="rounded-2xl p-4 border" style={{ backgroundColor: '#f8fafc', borderColor: '#e2e8f0' }}>
                       <div className="flex items-center justify-between mb-3">
-                        <span className="text-xs font-semibold" style={{ color: '#166634' }}>Client #{i + 1}</span>
+                        <span className="text-xs font-semibold" style={{ color: '#166534' }}>Client #{i + 1}</span>
                         <button type="button" onClick={() => supprimerAugmentation(i)}
                           className="w-6 h-6 rounded-full flex items-center justify-center text-xs"
                           style={{ backgroundColor: '#FEE2E2', color: '#991B1B' }}>✕</button>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div className="col-span-2">
-                          <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Nom & Prénoms client *</label>
-                          <input type="text" value={a.nom_client}
-                            onChange={e => updateAugmentation(i, 'nom_client', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }} placeholder="Nom et prénoms du client" />
+                          <SmallField label="Nom & Prénoms client *" value={a.nom_client} onChange={v => updateAugmentation(i, 'nom_client', v)} placeholder="Nom et prénoms du client" />
                         </div>
-                        <div>
-                          <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Ancienne mise (F)</label>
-                          <input type="number" value={a.ancienne_mise}
-                            onChange={e => updateAugmentation(i, 'ancienne_mise', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }} placeholder="0" />
-                        </div>
-                        <div>
-                          <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Nouvelle mise (F)</label>
-                          <input type="number" value={a.nouvelle_mise}
-                            onChange={e => updateAugmentation(i, 'nouvelle_mise', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }} placeholder="0" />
-                        </div>
+                        <SmallField label="Ancienne mise (F)" value={a.ancienne_mise} onChange={v => updateAugmentation(i, 'ancienne_mise', v)} type="number" />
+                        <SmallField label="Nouvelle mise (F)" value={a.nouvelle_mise} onChange={v => updateAugmentation(i, 'nouvelle_mise', v)} type="number" />
                         <div className="col-span-2">
                           <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Motif</label>
-                          <select value={a.motif}
-                            onChange={e => updateAugmentation(i, 'motif', e.target.value)}
-                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                            style={{ borderColor: '#e2e8f0' }}>
+                          <select value={a.motif} onChange={e => updateAugmentation(i, 'motif', e.target.value)}
+                            className="w-full px-3 py-2 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }}>
                             <option value="EPARGNE">EPARGNE</option>
                             <option value="BESOIN">BESOIN</option>
                             <option value="AUTRE">AUTRE</option>
@@ -680,65 +572,32 @@ export default function FicheJournaliere() {
                   ))}
                 </div>
               )}
-
               <button type="button" onClick={ajouterAugmentation}
                 className="w-full py-2.5 rounded-xl text-sm font-semibold border-2 border-dashed"
                 style={{ borderColor: '#166534', color: '#166534', backgroundColor: 'transparent' }}>
                 ➕ Ajouter une augmentation de mise
               </button>
-
-              {augmentations.length > 0 && (
-                <div className="rounded-xl p-3 flex items-center justify-between"
-                  style={{ backgroundColor: '#F0FDF4' }}>
-                  <span className="text-xs font-medium" style={{ color: '#166534' }}>
-                    Nombre total d&apos;augmentations
-                  </span>
-                  <span className="font-bold text-sm" style={{ color: '#166534' }}>
-                    {totalAugmentations}
-                  </span>
-                </div>
-              )}
             </div>
           </SectionCard>
 
-          {/* ── SECTION : Assurances ── */}
-          <SectionCard
-            titre="🛡️ Assurances"
+          {/* Assurances */}
+          <SectionCard titre="🛡️ Assurances"
             badge={totalAssurancesNb > 0 ? `${totalAssurancesNb} contrat(s)` : undefined}
-            ouverte={sectionsOuvertes.assurances}
-            onToggle={() => toggleSection('assurances')}>
+            ouverte={sectionsOuvertes.assurances} onToggle={() => toggleSection('assurances')}>
             <div className="space-y-4">
-              <div className="p-3 rounded-xl text-xs" style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-                ℹ️ Deux types d&apos;assurances : <strong>Honaméto</strong> et <strong>Akofa</strong>
-              </div>
               {assurances.map((a, i) => (
                 <div key={i} className="rounded-2xl p-4 border" style={{ backgroundColor: '#f8fafc', borderColor: '#e2e8f0' }}>
-                  <div className="font-semibold text-sm mb-3"
-                    style={{ color: i === 0 ? '#2A4E94' : '#166534' }}>
+                  <div className="font-semibold text-sm mb-3" style={{ color: i === 0 ? '#2A4E94' : '#166534' }}>
                     {i === 0 ? '🔵' : '🟢'} Assurance {a.type_assurance}
                   </div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Nombre de contrats</label>
-                      <input type="number" value={a.nb}
-                        onChange={e => updateAssurance(i, 'nb', e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                        style={{ borderColor: '#e2e8f0' }} placeholder="0" min="0" />
-                    </div>
-                    <div>
-                      <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>Montant total (F)</label>
-                      <input type="number" value={a.montant}
-                        onChange={e => updateAssurance(i, 'montant', e.target.value)}
-                        className="w-full px-3 py-2 rounded-xl border text-sm outline-none"
-                        style={{ borderColor: '#e2e8f0' }} placeholder="0" min="0" />
-                    </div>
+                    <SmallField label="Nombre de contrats" value={a.nb} onChange={v => updateAssurance(i, 'nb', v)} type="number" />
+                    <SmallField label="Montant total (F)" value={a.montant} onChange={v => updateAssurance(i, 'montant', v)} type="number" />
                   </div>
                 </div>
               ))}
-
               {totalAssurancesNb > 0 && (
-                <div className="rounded-xl p-3 grid grid-cols-2 gap-2"
-                  style={{ backgroundColor: '#F0FDF4' }}>
+                <div className="rounded-xl p-3 grid grid-cols-2 gap-2" style={{ backgroundColor: '#F0FDF4' }}>
                   <div className="text-center">
                     <div className="font-bold" style={{ color: '#166534' }}>{totalAssurancesNb}</div>
                     <div className="text-xs" style={{ color: '#166534' }}>Total contrats</div>
@@ -752,11 +611,9 @@ export default function FicheJournaliere() {
             </div>
           </SectionCard>
 
-          {/* ── SECTION : Observations ── */}
+          {/* Observations */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-            <h3 className="font-semibold text-sm mb-3 flex items-center gap-2" style={{ color: '#2A4E94' }}>
-              📝 Observations
-            </h3>
+            <h3 className="font-semibold text-sm mb-3" style={{ color: '#2A4E94' }}>📝 Observations</h3>
             <textarea value={form.observations}
               onChange={e => setForm(p => ({ ...p, observations: e.target.value }))}
               className="w-full px-4 py-3 rounded-xl border text-sm outline-none resize-none"
@@ -764,44 +621,17 @@ export default function FicheJournaliere() {
               rows={3} placeholder="Remarques, difficultés rencontrées..." />
           </div>
 
-          {/* ── SECTION : Pièces jointes ── */}
-          <SectionCard
-            titre="📎 Pièces jointes"
-            badge={files.length > 0 ? `${files.length} fichier(s)` : undefined}
-            ouverte={sectionsOuvertes.pieces}
-            onToggle={() => toggleSection('pieces')}>
-            <label className="flex flex-col items-center justify-center w-full h-28 border-2 border-dashed rounded-xl cursor-pointer"
-              style={{ borderColor: '#2A4E94', backgroundColor: '#EEF2FF' }}>
-              <span className="text-2xl mb-1">📁</span>
-              <p className="text-sm font-medium" style={{ color: '#2A4E94' }}>Ajouter des fichiers</p>
-              <p className="text-xs mt-0.5" style={{ color: '#818387' }}>Photos, reçus, PDF</p>
-              <input type="file" multiple onChange={handleFiles} className="hidden" accept="image/*,.pdf" />
-            </label>
-            {files.length > 0 && (
-              <div className="mt-3 space-y-2">
-                {files.map((f, i) => (
-                  <div key={i} className="flex items-center gap-2 p-2 rounded-xl" style={{ backgroundColor: '#f8fafc' }}>
-                    <span>📄</span>
-                    <span className="text-xs flex-1 truncate" style={{ color: '#1a1a2e' }}>{f.name}</span>
-                    <span className="text-xs" style={{ color: '#818387' }}>{(f.size / 1024).toFixed(0)} Ko</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </SectionCard>
-
-          {/* ── Récapitulatif avant soumission ── */}
+          {/* Récapitulatif */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
             <h3 className="font-semibold text-sm mb-4" style={{ color: '#1a1a2e' }}>📊 Récapitulatif</h3>
             <div className="grid grid-cols-2 gap-2 text-xs">
-            {[
+              {[
                 { label: 'Montant SMART', value: montantSmart.toLocaleString() + ' F', color: '#2A4E94' },
                 { label: 'Montant Caisse', value: montantCaisse.toLocaleString() + ' F', color: '#2A4E94' },
                 { label: typeEcart === 'manquant' ? '⚠️ Manquant' : typeEcart === 'surplus' ? '🔵 Surplus' : '✅ Écart', value: Math.abs(ecart).toLocaleString() + ' F', color: typeEcart === 'ok' ? '#166534' : typeEcart === 'manquant' ? '#991B1B' : '#2A4E94' },
                 { label: 'Commission', value: (parseFloat(form.commission_jour) || 0).toLocaleString() + ' F', color: '#854D0E' },
                 { label: 'Comptes DAT', value: form.comptes_ouverts_dat || '0', color: '#2A4E94' },
                 { label: 'Adhésions', value: form.nb_adhesions || '0', color: '#2A4E94' },
-                { label: 'Lydé Cash', value: form.nb_abonnements_lyde_cash || '0', color: '#2A4E94' },
                 { label: 'Réactivations', value: reactivations.filter(r => r.nom_prenom).length, color: '#854D0E' },
                 { label: 'Augm. mise', value: augmentations.filter(a => a.nom_client).length, color: '#854D0E' },
                 { label: 'Assurances', value: totalAssurancesNb, color: '#2A4E94' },
@@ -815,7 +645,7 @@ export default function FicheJournaliere() {
             </div>
           </div>
 
-          {/* Bouton soumettre */}
+          {/* Soumettre */}
           <button type="submit" disabled={loading}
             className="w-full py-4 rounded-xl text-white font-semibold text-sm flex items-center justify-center gap-2"
             style={{ backgroundColor: loading ? '#818387' : '#2A4E94' }}>
@@ -825,65 +655,44 @@ export default function FicheJournaliere() {
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                Envoi en cours...
+                {isEdit ? 'Modification...' : 'Envoi...'}
               </>
             ) : (
-              <>Soumettre ma fiche →</>
+              <>{isEdit ? '💾 Enregistrer les modifications' : 'Soumettre ma fiche →'}</>
             )}
           </button>
 
-          {/* Espace bas mobile */}
           <div className="h-8" />
-
         </form>
       </div>
     </div>
   )
 }
 
-// ── Composant SectionCard ──
-function SectionCard({
-  titre, children, ouverte, onToggle, badge
-}: {
-  titre: string
-  children: React.ReactNode
-  ouverte: boolean
-  onToggle: () => void
-  badge?: string
+// ── Composants ──
+function SectionCard({ titre, children, ouverte, onToggle, badge }: {
+  titre: string; children: React.ReactNode; ouverte: boolean; onToggle: () => void; badge?: string
 }) {
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-      <button type="button" onClick={onToggle}
-        className="w-full px-5 py-4 flex items-center justify-between text-left">
+      <button type="button" onClick={onToggle} className="w-full px-5 py-4 flex items-center justify-between text-left">
         <div className="flex items-center gap-2">
           <h3 className="font-semibold text-sm" style={{ color: '#2A4E94' }}>{titre}</h3>
           {badge && (
             <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-              style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-              {badge}
-            </span>
+              style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>{badge}</span>
           )}
         </div>
         <span className="text-sm" style={{ color: '#818387' }}>{ouverte ? '▲' : '▼'}</span>
       </button>
-      {ouverte && (
-        <div className="px-5 pb-5">
-          {children}
-        </div>
-      )}
+      {ouverte && <div className="px-5 pb-5">{children}</div>}
     </div>
   )
 }
 
-// ── Composant Field ──
 function Field({ label, value, onChange, type = 'text', suffix, objectif, placeholder }: {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  type?: string
-  suffix?: string
-  objectif?: string
-  placeholder?: string
+  label: string; value: string; onChange: (v: string) => void
+  type?: string; suffix?: string; objectif?: string; placeholder?: string
 }) {
   return (
     <div>
@@ -891,9 +700,7 @@ function Field({ label, value, onChange, type = 'text', suffix, objectif, placeh
         <label className="text-xs font-medium" style={{ color: '#1a1a2e' }}>{label}</label>
         {objectif && (
           <span className="text-xs px-2 py-0.5 rounded-full"
-            style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-            Obj : {objectif}
-          </span>
+            style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>Obj : {objectif}</span>
         )}
       </div>
       <div className="relative">
@@ -904,11 +711,22 @@ function Field({ label, value, onChange, type = 'text', suffix, objectif, placeh
           onFocus={e => e.target.style.borderColor = '#2A4E94'}
           onBlur={e => e.target.style.borderColor = '#e2e8f0'} />
         {suffix && (
-          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs" style={{ color: '#818387' }}>
-            {suffix}
-          </span>
+          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs" style={{ color: '#818387' }}>{suffix}</span>
         )}
       </div>
+    </div>
+  )
+}
+
+function SmallField({ label, value, onChange, type = 'text', placeholder }: {
+  label: string; value: string; onChange: (v: string) => void; type?: string; placeholder?: string
+}) {
+  return (
+    <div>
+      <label className="text-xs font-medium mb-1 block" style={{ color: '#818387' }}>{label}</label>
+      <input type={type} value={value} onChange={e => onChange(e.target.value)}
+        min={type === 'number' ? 0 : undefined} placeholder={placeholder || (type === 'number' ? '0' : '')}
+        className="w-full px-3 py-2 rounded-xl border text-sm outline-none" style={{ borderColor: '#e2e8f0' }} />
     </div>
   )
 }

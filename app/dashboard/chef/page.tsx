@@ -1043,7 +1043,7 @@ const totalCollecte = totalSmart
                                                 setValidationFiche(f)
                                                 setValidationStatut('validee')
                                                 setValidationCommentaire('')
-                                                setShowValidationModal(true)
+                                                  setShowValidationModal(true)
                                               }}
                                               className="flex-1 py-2 rounded-lg text-xs font-semibold"
                                               style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
