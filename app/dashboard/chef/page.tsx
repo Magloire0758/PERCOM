@@ -366,7 +366,10 @@ if (allMemberIds.length > 0) {
   }
 
 // ── Helper écart ──
-const getEcart = (f: any) => (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+const getEcart = (f: any) => {
+  if (!f) return 0
+  return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+}
 
 // ── Calculs agent ──
 const fichesMois = fiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))

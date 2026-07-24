@@ -126,7 +126,7 @@ export default function DashboardAgent() {
       .from('fiches_journalieres')
       .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
       .eq('agent_id', agentId).order('date', { ascending: false })
-    setFiches(all || [])
+      setFiches((all || []).filter(Boolean))
   }
 
   async function loadObjectifs(a: any) {
@@ -240,7 +240,10 @@ export default function DashboardAgent() {
 
   // ── Calculs ──
 // Helper écart
-const getEcart = (f: any) => (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+const getEcart = (f: any) => {
+  if (!f) return 0
+  return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+}
 
 const fichesMois = fiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
 const totalComptesDat = fichesMois.reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0)

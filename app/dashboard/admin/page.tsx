@@ -189,7 +189,10 @@ const [equipeZoneLoading, setEquipeZoneLoading] = useState(false)
 
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-  const getEcart = (f: any) => (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+  const getEcart = (f: any) => {
+    if (!f) return 0
+    return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
+  }
 useEffect(() => {
   if (tab === 'agents') loadAgentsData()
   if (tab === 'objectifs') loadObjectifs()
