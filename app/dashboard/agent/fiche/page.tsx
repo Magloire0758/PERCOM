@@ -129,18 +129,19 @@ export default function FicheJournaliere() {
         montant_depot_dav: String(f.montant_depot_dav ?? ''),
         observations: f.observations ?? '',
       })
-      setReactivations((f.reactivations || []).map((r: any) => ({
+      setReactivations((f.reactivations || []).filter(Boolean).map((r: any) => ({
         n_client: r.n_client ?? '', nom_prenom: r.nom_prenom ?? '', produit: r.produit ?? 'TONTINE',
         mise: String(r.mise ?? ''), nouvelle_mise: String(r.nouvelle_mise ?? ''),
         montant_cotise: String(r.montant_cotise ?? ''), reactif: r.reactif ?? true,
         commentaire: r.commentaire ?? '',
       })))
-      setAugmentations((f.augmentations_mise || []).map((x: any) => ({
+      setAugmentations((f.augmentations_mise || []).filter(Boolean).map((x: any) => ({
         nom_client: x.nom_client ?? '', ancienne_mise: String(x.ancienne_mise ?? ''),
         nouvelle_mise: String(x.nouvelle_mise ?? ''), motif: x.motif ?? 'EPARGNE',
       })))
-      const hona = (f.assurances_details || []).find((x: any) => x.type_assurance === 'Honaméto')
-      const akofa = (f.assurances_details || []).find((x: any) => x.type_assurance === 'Akofa')
+      const assurList = (f.assurances_details || []).filter(Boolean)
+      const hona = assurList.find((x: any) => x?.type_assurance === 'Honaméto')
+      const akofa = assurList.find((x: any) => x?.type_assurance === 'Akofa')
       setAssurances([
         { type_assurance: 'Honaméto', nb: String(hona?.nb ?? ''), montant: String(hona?.montant ?? '') },
         { type_assurance: 'Akofa', nb: String(akofa?.nb ?? ''), montant: String(akofa?.montant ?? '') },
