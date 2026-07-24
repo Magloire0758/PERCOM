@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import FicheDetail from '@/components/FicheDetail'
+import RegularisationModal from '@/components/RegularisationModal'   // ← AJOUTER
+import EcartHistorique from '@/components/EcartHistorique'           // ← AJOUTER
 
 type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres' | 'equipes' | 'permissions' | 'manquants'
 
@@ -172,6 +174,8 @@ const [manquantFilterDateFin, setManquantFilterDateFin] = useState('')
 const [selectedManquant, setSelectedManquant] = useState<any>(null)
 const [showReglementModal, setShowReglementModal] = useState(false)
 const [reglementFiche, setReglementFiche] = useState<any>(null)
+const [showRegulModal, setShowRegulModal] = useState(false)
+const [regulFiche, setRegulFiche] = useState<any>(null)
 const [reglementCommentaire, setReglementCommentaire] = useState('')
 const [reglementLoading, setReglementLoading] = useState(false)
 
@@ -193,6 +197,13 @@ const [equipeZoneLoading, setEquipeZoneLoading] = useState(false)
     if (!f) return 0
     return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
   }
+
+  const getRestant = (f: any) => {
+    if (!f) return 0
+    return Math.abs(getEcart(f)) - (f.montant_regularise || 0)
+  }
+
+
 useEffect(() => {
   if (tab === 'agents') loadAgentsData()
   if (tab === 'objectifs') loadObjectifs()
@@ -278,7 +289,7 @@ useEffect(() => {
       supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise').eq('date', today),
       supabase.from('fiches_journalieres').select('montant_smart, montant_mobilise, commission_jour, agent_id').gte('date', moisDebut),
       supabase.from('agents').select('*', { count: 'exact', head: true }).eq('statut', 'en_attente'),
-      supabase.from('fiches_journalieres').select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte').eq('manquant_regle', false),
+      supabase.from('fiches_journalieres').select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte, montant_regularise').eq('manquant_regle', false),
       supabase.from('fiches_journalieres').select('*', { count: 'exact', head: true }).eq('valide_chef', false),
     ])
 
@@ -289,8 +300,10 @@ useEffect(() => {
     let manquantsTotal = 0, surplusTotal = 0, nbEcarts = 0
     ;(manquants || []).forEach(f => {
       const e = getEcart(f)
-      if (e > 0) { manquantsTotal += e; nbEcarts++ }
-      else if (e < 0) { surplusTotal += Math.abs(e); nbEcarts++ }
+      const restant = Math.abs(e) - (f.montant_regularise || 0)
+      if (restant <= 0) return
+      if (e > 0) { manquantsTotal += restant; nbEcarts++ }
+      else if (e < 0) { surplusTotal += restant; nbEcarts++ }
     })
 
     setStats({
@@ -3236,9 +3249,10 @@ useEffect(() => {
 
             {(() => {
               const nonRegle = manquants.filter(f => !f.manquant_regle)
-              const totalManq = nonRegle.filter(f => getEcart(f) > 0).reduce((s, f) => s + getEcart(f), 0)
-              const totalSurp = Math.abs(nonRegle.filter(f => getEcart(f) < 0).reduce((s, f) => s + getEcart(f), 0))
+              const totalManq = nonRegle.filter(f => getEcart(f) > 0).reduce((s, f) => s + getRestant(f), 0)
+              const totalSurp = nonRegle.filter(f => getEcart(f) < 0).reduce((s, f) => s + getRestant(f), 0)
               const nbRegle = manquants.filter(f => f.manquant_regle).length
+              const totalRegularise = manquants.reduce((s, f) => s + (f.montant_regularise || 0), 0)
               return (
                 <div className="grid grid-cols-4 gap-3">
                   {[
@@ -3246,6 +3260,7 @@ useEffect(() => {
                     { label: 'Surplus non réglés', value: totalSurp.toLocaleString() + ' F', bg: '#EEF2FF', color: '#2A4E94', icon: '🔵' },
                     { label: 'Écarts réglés', value: nbRegle, bg: '#F0FDF4', color: '#166534', icon: '✅' },
                     { label: 'Fiches concernées', value: manquants.length, bg: '#FEF9C3', color: '#854D0E', icon: '📋' },
+                    { label: 'Total régularisé', value: totalRegularise.toLocaleString() + ' F', bg: '#F0FDF4', color: '#166534', icon: '💰' },
                   ].map(s => (
                     <div key={s.label} className="rounded-2xl p-4" style={{ backgroundColor: s.bg }}>
                       <div className="text-2xl mb-1">{s.icon}</div>
@@ -3292,7 +3307,7 @@ useEffect(() => {
                 <table className="w-full">
                   <thead className="sticky top-0" style={{ backgroundColor: '#f8fafc' }}>
                     <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      {['Date', 'Agent', 'Agence', 'SMART', 'Caisse', 'Écart', 'Type', 'Actions'].map(h => (
+                    {['Date', 'Agent', 'Agence', 'Écart', 'Régularisé', 'Restant', 'Type', 'Actions'].map(h => (
                         <th key={h} className="text-left px-3 py-3 text-xs font-semibold" style={{ color: '#818387' }}>{h}</th>
                       ))}
                     </tr>
@@ -3340,15 +3355,16 @@ useEffect(() => {
                             </div>
                           </td>
                           <td className="px-3 py-3 text-xs" style={{ color: '#818387' }}>{f.agents?.agences?.nom || '—'}</td>
-                          <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#166534' }}>
-                            {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
+                          <td className="px-3 py-3 text-xs font-semibold"
+                            style={{ color: isManquant ? '#991B1B' : '#2A4E94' }}>
+                            {montant.toLocaleString()} F
                           </td>
-                          <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#2A4E94' }}>
-                            {(f.montant_caisse ?? f.montant_rapporte ?? 0).toLocaleString()} F
+                          <td className="px-3 py-3 text-xs font-semibold" style={{ color: '#166534' }}>
+                            {(f.montant_regularise || 0).toLocaleString()} F
                           </td>
                           <td className="px-3 py-3 text-sm font-bold"
-                            style={{ color: f.manquant_regle ? '#166534' : isManquant ? '#E4322C' : '#2A4E94' }}>
-                            {isManquant ? '−' : '+'} {montant.toLocaleString()} F
+                            style={{ color: getRestant(f) <= 0 ? '#166534' : '#854D0E' }}>
+                            {Math.max(0, getRestant(f)).toLocaleString()} F
                           </td>
                           <td className="px-3 py-3">
                             <span className="text-xs px-2 py-0.5 rounded-full font-medium"
@@ -3360,12 +3376,12 @@ useEffect(() => {
                             </span>
                           </td>
                           <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
-                            {!f.manquant_regle && (
+                            {!f.manquant_regle && getRestant(f) > 0 && (
                               <button type="button"
-                                onClick={() => { setReglementFiche(f); setShowReglementModal(true) }}
+                                onClick={() => { setRegulFiche(f); setShowRegulModal(true) }}
                                 className="px-2 py-1.5 rounded-lg text-xs font-semibold text-white"
                                 style={{ backgroundColor: '#2A4E94' }}>
-                                Régler
+                                💰 Régulariser
                               </button>
                             )}
                           </td>
@@ -3455,24 +3471,37 @@ useEffect(() => {
                     </div>
                   </div>
 
+                  {/* Historique des régularisations */}
+                  <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
+                    <h4 className="font-semibold text-xs mb-3" style={{ color: '#818387' }}>
+                      💰 RÉGULARISATIONS
+                    </h4>
+                    <EcartHistorique
+                      ficheId={selectedManquant.id}
+                      ecartTotal={montant}
+                      montantRegularise={selectedManquant.montant_regularise || 0}
+                      isManquant={isManquant}
+                    />
+                  </div>
+
                   {selectedManquant.commentaire_chef && (
                     <div className="p-5 border-b" style={{ borderColor: '#f1f5f9' }}>
-                      <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>NOTE</h4>
+                      <h4 className="font-semibold text-xs mb-2" style={{ color: '#818387' }}>NOTE DE VALIDATION</h4>
                       <p className="text-sm" style={{ color: '#1a1a2e' }}>{selectedManquant.commentaire_chef}</p>
                     </div>
                   )}
 
                   <div className="p-5">
-                    {!regle ? (
+                    {getRestant(selectedManquant) > 0 ? (
                       <button type="button"
-                        onClick={() => { setReglementFiche(selectedManquant); setShowReglementModal(true) }}
+                        onClick={() => { setRegulFiche(selectedManquant); setShowRegulModal(true) }}
                         className="w-full py-3 rounded-xl text-white text-sm font-semibold"
                         style={{ backgroundColor: '#2A4E94' }}>
-                        {isManquant ? '💰 Confirmer le règlement' : '✅ Confirmer la régularisation'}
+                        💰 Enregistrer une régularisation
                       </button>
                     ) : (
                       <div className="text-center text-sm font-medium" style={{ color: '#166534' }}>
-                        ✅ Cet écart a été réglé
+                        ✅ Écart entièrement régularisé
                       </div>
                     )}
                   </div>
@@ -4624,91 +4653,20 @@ useEffect(() => {
   </div>
 )}
 
-{/* MODAL RÈGLEMENT MANQUANT */}
-{showReglementModal && reglementFiche && (
-  <div className="fixed inset-0 flex items-center justify-center z-50 p-4"
-    style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
-    <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
-      <div className="px-6 py-4 border-b flex items-center justify-between"
-        style={{ borderColor: '#f1f5f9' }}>
-        <h3 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>
-          {getEcart(reglementFiche) > 0 ? '💰 Confirmer le règlement' : '✅ Confirmer la régularisation'}
-        </h3>
-        <button type="button" onClick={() => { setShowReglementModal(false); setReglementCommentaire('') }}
-          className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
-      </div>
-
-      <div className="p-6 space-y-4">
-        {/* Info */}
-        {(() => {
-          const ec = getEcart(reglementFiche)
-          const isM = ec > 0
-          return (
-            <div className="rounded-xl p-4"
-              style={{
-                backgroundColor: isM ? '#FEF2F2' : '#EEF2FF',
-                border: `1px solid ${isM ? '#FECACA' : '#C7D2FE'}`
-              }}>
-              <div className="font-semibold text-sm" style={{ color: isM ? '#991B1B' : '#2A4E94' }}>
-                {reglementFiche.agents?.prenom} {reglementFiche.agents?.nom}
-              </div>
-              <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
-                Fiche du {new Date(reglementFiche.date).toLocaleDateString('fr-FR')}
-                · {reglementFiche.agents?.agences?.nom}
-              </div>
-              <div className="text-xs mt-1" style={{ color: '#818387' }}>
-                SMART {(reglementFiche.montant_smart ?? reglementFiche.montant_mobilise ?? 0).toLocaleString()} F ·
-                Caisse {(reglementFiche.montant_caisse ?? reglementFiche.montant_rapporte ?? 0).toLocaleString()} F
-              </div>
-              <div className="font-bold text-2xl mt-2" style={{ color: isM ? '#E4322C' : '#2A4E94' }}>
-                {isM ? '⚠️ Manquant' : '🔵 Surplus'} : {Math.abs(ec).toLocaleString()} FCFA
-              </div>
-            </div>
-          )
-        })()}
-
-        {/* Commentaire */}
-        <div>
-          <label className="block text-xs font-semibold mb-1.5" style={{ color: '#1a1a2e' }}>
-            Note / Commentaire (optionnel)
-          </label>
-          <textarea value={reglementCommentaire}
-            onChange={e => setReglementCommentaire(e.target.value)}
-            rows={3}
-            className="w-full px-4 py-3 rounded-xl border text-sm outline-none resize-none"
-            style={{ borderColor: '#e2e8f0' }}
-            placeholder="Ex: Règlement effectué en cash le 22/05..." />
-        </div>
-
-        {/* Info notification */}
-        <div className="rounded-xl p-3 flex items-center gap-2"
-          style={{ backgroundColor: '#EEF2FF' }}>
-          <span>🔔</span>
-          <p className="text-xs" style={{ color: '#2A4E94' }}>
-            L&apos;agent recevra une notification de confirmation.
-          </p>
-        </div>
-
-        {/* Boutons */}
-        <div className="flex gap-3">
-          <button type="button"
-            onClick={() => { setShowReglementModal(false); setReglementCommentaire('') }}
-            className="flex-1 py-3 rounded-xl text-sm font-semibold border"
-            style={{ borderColor: '#e2e8f0', color: '#818387' }}>
-            Annuler
-          </button>
-          <button type="button"
-            onClick={() => confirmerReglement(reglementFiche.id, reglementCommentaire)}
-            disabled={reglementLoading}
-            className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
-            style={{ backgroundColor: reglementLoading ? '#818387' : '#166534' }}>
-            {reglementLoading ? 'Traitement...' : '✅ Confirmer le règlement'}
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-)}
+{/* MODAL RÉGULARISATION */}
+{showRegulModal && regulFiche && (
+        <RegularisationModal
+          fiche={regulFiche}
+          onClose={() => { setShowRegulModal(false); setRegulFiche(null) }}
+          onSuccess={() => {
+            loadManquants()
+            loadFiches()
+            loadStats()
+            loadAlertes()
+            setSelectedManquant(null)
+          }}
+        />
+      )}
 
 {/* MODAL AJOUTER ZONE À UN AGENT */}
 {showAddZoneAgentModal && selectedAgent && (
