@@ -126,7 +126,7 @@ export default function DashboardAgent() {
       .from('fiches_journalieres')
       .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
       .eq('agent_id', agentId).order('date', { ascending: false })
-      setFiches((all || []).filter(Boolean))
+    setFiches((all || []).filter(Boolean))
   }
 
   async function loadObjectifs(a: any) {
@@ -245,7 +245,7 @@ const getEcart = (f: any) => {
   return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
 }
 
-const fichesMois = fiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+const fichesMois = fiches.filter(f => f && new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
 const totalComptesDat = fichesMois.reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0)
 const totalSmart = fichesMois.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
 const totalCaisse = fichesMois.reduce((s, f) => s + (f.montant_caisse ?? f.montant_rapporte ?? 0), 0)
@@ -278,7 +278,7 @@ const totalCollecte = totalSmart
     return count
   })()
 
-  const ecartsListe = fiches.filter(f => getEcart(f) !== 0)
+  const ecartsListe = fiches.filter(f => f && getEcart(f) !== 0)
   const ecartsNonRegles = ecartsListe.filter(f => !f.manquant_regle)
   const manquantsNonRegles = ecartsNonRegles.filter(f => getEcart(f) > 0)
   const surplusNonRegles = ecartsNonRegles.filter(f => getEcart(f) < 0)
@@ -289,7 +289,7 @@ const totalCollecte = totalSmart
   const messagesNonLus = messages.filter(m => m.destinataire_id === agent?.id && !m.lu).length
 
   const fichesFiltrees = (() => {
-    let f = [...fiches]
+    let f = fiches.filter(Boolean)
     const now = new Date()
     if (fichesPeriode === 'semaine') { const d = new Date(now); d.setDate(now.getDate() - 7); f = f.filter(x => new Date(x.date) >= d) }
     else if (fichesPeriode === 'mois') { f = f.filter(x => new Date(x.date) >= new Date(now.getFullYear(), now.getMonth(), 1)) }
@@ -616,7 +616,7 @@ const totalCollecte = totalSmart
     <h2 className="text-sm font-bold mb-3" style={{ color: text }}>🎯 Performance du jour</h2>
     <div className="grid grid-cols-3 gap-3">
       {[
-        { label: 'Montant collecté', value: (ficheDuJour.montant_mobilise || 0).toLocaleString() + ' F', objectif: 25000, raw: ficheDuJour.montant_mobilise || 0 },
+        { label: 'SMART', value: (ficheDuJour.montant_smart ?? ficheDuJour.montant_mobilise ?? 0).toLocaleString() + ' F', objectif: 25000, raw: ficheDuJour.montant_smart ?? ficheDuJour.montant_mobilise ?? 0 },
         { label: 'Commission', value: (ficheDuJour.commission_jour || 0).toLocaleString() + ' F', objectif: 5000, raw: ficheDuJour.commission_jour || 0 },
         { label: 'Comptes DAT', value: ficheDuJour.comptes_ouverts_dat || ficheDuJour.comptes_ouverts || 0, objectif: 6, raw: ficheDuJour.comptes_ouverts_dat || ficheDuJour.comptes_ouverts || 0 },
         { label: 'Adhésions', value: ficheDuJour.nb_adhesions || 0, objectif: 5, raw: ficheDuJour.nb_adhesions || 0 },
@@ -813,27 +813,18 @@ const totalCollecte = totalSmart
 
                 {/* Mini stats */}
                 <div className="grid grid-cols-4 gap-1">
-                {[
-                    { label: 'SMART', value: (ficheDuJour.montant_smart ?? ficheDuJour.montant_mobilise ?? 0).toLocaleString() + ' F', objectif: 25000, raw: ficheDuJour.montant_smart ?? ficheDuJour.montant_mobilise ?? 0 },
-                    { label: 'Commission', value: (ficheDuJour.commission_jour || 0).toLocaleString() + ' F', objectif: 5000, raw: ficheDuJour.commission_jour || 0 },
-                    { label: 'Comptes DAT', value: ficheDuJour.comptes_ouverts_dat ?? ficheDuJour.comptes_ouverts ?? 0, objectif: 6, raw: ficheDuJour.comptes_ouverts_dat ?? ficheDuJour.comptes_ouverts ?? 0 },
-                    { label: 'Adhésions', value: ficheDuJour.nb_adhesions || 0, objectif: 5, raw: ficheDuJour.nb_adhesions || 0 },
-                    { label: 'Réactivations', value: ficheDuJour.reactivations?.length || 0, objectif: 3, raw: ficheDuJour.reactivations?.length || 0 },
-                    { label: 'Augm. mise', value: ficheDuJour.augmentations_mise?.length || 0, objectif: 3, raw: ficheDuJour.augmentations_mise?.length || 0 },
-                  ].map(k => {
-                    const pct = Math.min(100, Math.round((k.raw / k.objectif) * 100))
-                    const color = pct >= 100 ? '#166534' : pct >= 50 ? '#854D0E' : '#991B1B'
-                    const barColor = pct >= 100 ? '#22C55E' : pct >= 50 ? '#EAB308' : '#EF4444'
-                    return (
-                      <div key={k.label} className="rounded-2xl p-3" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                        <div className="text-xs mb-1" style={{ color: sub }}>{k.label}</div>
-                        <div className="font-bold text-base" style={{ color }}>{k.value}</div>
-                        <div className="w-full h-1.5 rounded-full mt-2" style={{ backgroundColor: isDark ? '#334155' : '#f1f5f9' }}>
-                          <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, backgroundColor: barColor }} />
-                        </div>
-                      </div>
-                    )
-                  })}
+                  {[
+                    { label: 'SMART', value: ((fiche.montant_smart ?? fiche.montant_mobilise ?? 0) / 1000).toFixed(0) + 'k' },
+                    { label: 'Caisse', value: ((fiche.montant_caisse ?? fiche.montant_rapporte ?? 0) / 1000).toFixed(0) + 'k' },
+                    { label: 'Réact.', value: fiche.reactivations?.length || 0 },
+                    { label: 'Augm.', value: fiche.augmentations_mise?.length || 0 },
+                  ].map(k => (
+                    <div key={k.label} className="text-center p-1.5 rounded-lg"
+                      style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
+                      <div className="font-bold text-xs" style={{ color: '#2A4E94' }}>{k.value}</div>
+                      <div style={{ fontSize: '9px', color: sub }}>{k.label}</div>
+                    </div>
+                  ))}
                 </div>
 
                 <div className="text-xs mt-2 text-right" style={{ color: sub }}>
@@ -1075,7 +1066,7 @@ const totalCollecte = totalSmart
                 const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
                 const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0)
                 const fichesPrev = fiches.filter(f => new Date(f.date) >= prevStart && new Date(f.date) <= prevEnd)
-                const collectePrev = fichesPrev.reduce((s, f) => s + (f.montant_mobilise || 0), 0)
+                const collectePrev = fichesPrev.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
                 const diff = totalCollecte - collectePrev
                 const pct = collectePrev > 0 ? Math.round((diff / collectePrev) * 100) : 0
                 return (
