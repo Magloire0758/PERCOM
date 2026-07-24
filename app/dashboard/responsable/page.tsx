@@ -387,7 +387,10 @@ export default function DashboardResponsable() {
       .order('date', { ascending: false })
       .limit(200)
 
-    if (error) { console.error('loadFiches fiches:', error); setFiches([]); return }
+      if (error) {
+        console.error('loadFiches ERREUR:', error.message, '| details:', error.details, '| hint:', error.hint, '| code:', error.code)
+        setFiches([]); return
+      }
     setFiches((data || []).filter(Boolean))
   }
 
