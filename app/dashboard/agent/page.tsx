@@ -48,8 +48,16 @@ export default function DashboardAgent() {
 
   const [mesZones, setMesZones] = useState<any[]>([])
   const [selectedFicheAgent, setSelectedFicheAgent] = useState<any>(null)
+  const [showDatePicker, setShowDatePicker] = useState(false)
+  const [dateAnterieure, setDateAnterieure] = useState('')
 
   const today = new Date().toISOString().split('T')[0]
+
+  const dateMin = (() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 10)
+    return d.toISOString().split('T')[0]
+  })()
 
   // Online/offline
   useEffect(() => {
@@ -610,6 +618,25 @@ const totalCollecte = totalSmart
               )}
             </div>
 
+            {/* Bouton fiche antérieure */}
+            <button type="button" onClick={() => setShowDatePicker(true)}
+              className="w-full rounded-2xl p-4 flex items-center justify-between text-left"
+              style={{ backgroundColor: card, border: `1px dashed ${isDark ? '#475569' : '#cbd5e1'}` }}>
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
+                  style={{ backgroundColor: isDark ? '#334155' : '#f1f5f9' }}>📅</div>
+                <div>
+                  <div className="font-semibold text-sm" style={{ color: text }}>
+                    Saisir une fiche antérieure
+                  </div>
+                  <div className="text-xs mt-0.5" style={{ color: sub }}>
+                    Jusqu&apos;à 10 jours en arrière
+                  </div>
+                </div>
+              </div>
+              <span className="text-lg" style={{ color: sub }}>→</span>
+            </button>
+
             {/* KPIs du jour */}
             {ficheDuJour && (
   <div>
@@ -838,6 +865,21 @@ const totalCollecte = totalSmart
                   <FicheDetail fiche={fiche} isDark={isDark} />
                 </div>
               )}
+
+              {/* Bouton modifier */}
+              {fiche.statut_validation !== 'validee' && (
+                <div className="px-4 pb-4">
+                  <button type="button"
+                    onClick={() => router.push(`/dashboard/agent/fiche?edit=${fiche.id}`)}
+                    className="w-full py-2.5 rounded-xl text-xs font-semibold"
+                    style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
+                    ✏️ Modifier cette fiche
+                  </button>
+                </div>
+              )}
+
+
+
             </div>
           )
         })}
@@ -1440,6 +1482,91 @@ const totalCollecte = totalSmart
 
       {/* Padding bas */}
       <div className="h-20" />
+
+      {/* MODAL DATE ANTÉRIEURE */}
+      {showDatePicker && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+          onClick={() => setShowDatePicker(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl overflow-hidden"
+            onClick={e => e.stopPropagation()}
+            style={{ fontFamily: 'var(--font-dm-sans)' }}>
+            <div className="px-5 py-4 border-b flex items-center justify-between" style={{ borderColor: '#f1f5f9' }}>
+              <h3 className="font-bold text-base" style={{ color: '#1a1a2e' }}>📅 Fiche antérieure</h3>
+              <button type="button" onClick={() => setShowDatePicker(false)}
+                className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="p-3 rounded-xl text-xs" style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+                ℹ️ Vous pouvez saisir une fiche jusqu&apos;à 10 jours en arrière. Les dates déjà validées ne sont pas modifiables.
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold mb-2" style={{ color: '#1a1a2e' }}>
+                  Choisissez la date
+                </label>
+                <input type="date" value={dateAnterieure}
+                  min={dateMin} max={today}
+                  onChange={e => setDateAnterieure(e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                  style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }} />
+              </div>
+
+              {/* Raccourcis 5 derniers jours */}
+              <div>
+                <div className="text-xs font-semibold mb-2" style={{ color: '#818387' }}>Accès rapide</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {Array.from({ length: 5 }, (_, i) => {
+                    const d = new Date()
+                    d.setDate(d.getDate() - (i + 1))
+                    const ds = d.toISOString().split('T')[0]
+                    const f = fiches.find(x => x?.date === ds)
+                    const validee = f?.statut_validation === 'validee'
+                    return (
+                      <button key={ds} type="button" disabled={validee}
+                        onClick={() => setDateAnterieure(ds)}
+                        className="p-2 rounded-xl text-xs text-left"
+                        style={{
+                          backgroundColor: validee ? '#F0FDF4' : dateAnterieure === ds ? '#2A4E94' : '#f8fafc',
+                          color: validee ? '#166534' : dateAnterieure === ds ? 'white' : '#1a1a2e',
+                          opacity: validee ? 0.6 : 1,
+                          cursor: validee ? 'not-allowed' : 'pointer',
+                        }}>
+                        <div className="font-semibold">
+                          {d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' })}
+                        </div>
+                        <div style={{ fontSize: '10px', opacity: 0.75 }}>
+                          {validee ? '✅ Validée' : f ? '✏️ Modifiable' : '➕ Vide'}
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button type="button" onClick={() => setShowDatePicker(false)}
+                  className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+                  style={{ borderColor: '#e2e8f0', color: '#818387' }}>
+                  Annuler
+                </button>
+                <button type="button" disabled={!dateAnterieure}
+                  onClick={() => {
+                    setShowDatePicker(false)
+                    router.push(`/dashboard/agent/fiche?date=${dateAnterieure}`)
+                  }}
+                  className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+                  style={{ backgroundColor: dateAnterieure ? '#2A4E94' : '#cbd5e1' }}>
+                  Continuer →
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+
     </div>
   )
 }
