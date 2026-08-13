@@ -15,6 +15,11 @@ export default function DashboardAdmin() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [loading, setLoading] = useState(true)
   const [admin, setAdmin] = useState<any>(null)
+  const [showResetPwd, setShowResetPwd] = useState(false)
+  const [resetPwdAgent, setResetPwdAgent] = useState<any>(null)
+  const [newPwd, setNewPwd] = useState('')
+  const [resetLoading, setResetLoading] = useState(false)
+  const [resetMsg, setResetMsg] = useState({ type: '', text: '' })
 
   // Data
   const [stats, setStats] = useState({
@@ -272,7 +277,34 @@ useEffect(() => {
     setLoading(false)
   }
 
+  async function handleResetPassword() {
+    setResetMsg({ type: '', text: '' })
+    if (newPwd.length < 8) {
+      setResetMsg({ type: 'error', text: 'Minimum 8 caractères.' })
+      return
+    }
+    setResetLoading(true)
 
+    const { data: { session } } = await supabase.auth.getSession()
+    const res = await fetch('/api/admin/reset-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: resetPwdAgent.user_id,
+        newPassword: newPwd,
+        callerToken: session?.access_token,
+      }),
+    })
+    const data = await res.json()
+    setResetLoading(false)
+
+    if (!data.ok) {
+      setResetMsg({ type: 'error', text: data.error || 'Erreur.' })
+      return
+    }
+    setResetMsg({ type: 'success', text: `Mot de passe réinitialisé pour ${resetPwdAgent.prenom} ${resetPwdAgent.nom}.` })
+    setNewPwd('')
+  }
 
   async function loadStats() {
     const [
@@ -1923,6 +1955,21 @@ useEffect(() => {
             <button type="button" onClick={() => setSelectedAgent(null)}
               className="p-1.5 rounded-lg text-sm"
               style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+          </div>
+
+          {/* Action compte : reset mot de passe */}
+          <div className="px-5 py-3 border-b" style={{ borderColor: '#f1f5f9' }}>
+            <button type="button"
+              onClick={() => {
+                setResetPwdAgent(selectedAgent)
+                setNewPwd('')
+                setResetMsg({ type: '', text: '' })
+                setShowResetPwd(true)
+              }}
+              className="w-full py-2.5 rounded-xl text-sm font-semibold"
+              style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
+               Réinitialiser le mot de passe
+            </button>
           </div>
 
           {/* Infos */}
@@ -4812,6 +4859,82 @@ useEffect(() => {
     </div>
   </div>
 )}
+{/* MODAL RESET MOT DE PASSE */}
+{showResetPwd && resetPwdAgent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}
+          onClick={() => setShowResetPwd(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden"
+            onClick={e => e.stopPropagation()}
+            style={{ fontFamily: 'var(--font-dm-sans)' }}>
+
+            <div className="px-6 py-4 border-b flex items-center justify-between" style={{ borderColor: '#f1f5f9' }}>
+              <h3 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>🔑 Réinitialiser le mot de passe</h3>
+              <button type="button" onClick={() => setShowResetPwd(false)}
+                className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="rounded-xl p-3" style={{ backgroundColor: '#f8fafc' }}>
+                <div className="text-sm font-semibold" style={{ color: '#1a1a2e' }}>
+                  {resetPwdAgent.prenom} {resetPwdAgent.nom}
+                </div>
+                <div className="text-xs mt-0.5" style={{ color: '#818387' }}>{resetPwdAgent.email}</div>
+              </div>
+
+              {resetMsg.text && (
+                <div className="p-3 rounded-xl text-sm"
+                  style={{
+                    backgroundColor: resetMsg.type === 'success' ? '#F0FDF4' : '#FEF2F2',
+                    color: resetMsg.type === 'success' ? '#166534' : '#991B1B'
+                  }}>
+                  {resetMsg.type === 'success' ? '✅ ' : '❌ '}{resetMsg.text}
+                </div>
+              )}
+
+              {resetMsg.type !== 'success' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium mb-1.5" style={{ color: '#1a1a2e' }}>
+                      Nouveau mot de passe
+                    </label>
+                    <input type="text" value={newPwd} onChange={e => setNewPwd(e.target.value)}
+                      className="w-full px-4 py-3 rounded-xl border text-sm outline-none"
+                      style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}
+                      placeholder="Min. 8 caractères" autoFocus />
+                    <p className="text-xs mt-1" style={{ color: '#818387' }}>
+                      Communiquez-le à l&apos;utilisateur par un canal sûr. Il pourra le changer ensuite dans « Mon compte ».
+                    </p>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button type="button" onClick={() => setShowResetPwd(false)}
+                      className="flex-1 py-3 rounded-xl text-sm font-semibold border"
+                      style={{ borderColor: '#e2e8f0', color: '#818387' }}>
+                      Annuler
+                    </button>
+                    <button type="button" onClick={handleResetPassword} disabled={resetLoading || newPwd.length < 8}
+                      className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
+                      style={{ backgroundColor: resetLoading || newPwd.length < 8 ? '#cbd5e1' : '#2A4E94' }}>
+                      {resetLoading ? 'Réinitialisation...' : 'Confirmer'}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {resetMsg.type === 'success' && (
+                <button type="button" onClick={() => setShowResetPwd(false)}
+                  className="w-full py-3 rounded-xl text-sm font-semibold text-white"
+                  style={{ backgroundColor: '#2A4E94' }}>
+                  Fermer
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
+
+  
 }
