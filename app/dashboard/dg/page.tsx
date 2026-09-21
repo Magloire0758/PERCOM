@@ -5,6 +5,8 @@ import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import FicheDetail from '@/components/FicheDetail' 
 import EcartHistorique from '@/components/EcartHistorique'   // ← AJOUTER
+import { getEcart, getRestant } from '@/lib/ecarts'
+import { fetchAllRows } from '@/lib/supabase-pagination'
 
 type Tab = 'dashboard' | 'agences' | 'agents' | 'equipes' | 'objectifs' | 'fiches' | 'alertes' | 'manquants' | 'parametres'
 
@@ -77,6 +79,8 @@ export default function DashboardDG() {
 
   // Fiches
   const [fiches, setFiches] = useState<any[]>([])
+  const [fichesLoading, setFichesLoading] = useState(false)
+  const [fichesError, setFichesError] = useState('')
   const [ficheSearch, setFicheSearch] = useState('')
   const [ficheFilterAgence, setFicheFilterAgence] = useState('tous')
   const [ficheFilterStatut, setFicheFilterStatut] = useState('tous')
@@ -104,16 +108,6 @@ export default function DashboardDG() {
 
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-  const getEcart = (f: any) => {
-    if (!f) return 0
-    return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
-  }
-
-  const getRestant = (f: any) => {
-    if (!f) return 0
-    return Math.abs(getEcart(f)) - (f.montant_regularise || 0)
-  }
-
   useEffect(() => {
     if (tab === 'agents') loadAgentsData()
     if (tab === 'objectifs') loadObjectifs()
@@ -132,7 +126,11 @@ export default function DashboardDG() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { router.push('/login'); return }
     const { data: me } = await supabase.from('agents').select('*').eq('user_id', user.id).single()
-    if (!me || me.role !== 'dg') { router.push('/login'); return }
+    if (!me || me.role !== 'dg' || me.statut !== 'actif' || me.actif !== true) {
+      await supabase.auth.signOut()
+      router.push('/login')
+      return
+    }
     setDg(me)
     await Promise.all([loadStats(), loadAgences(), loadAgentsData(), loadObjectifs(), loadFiches()])
     setLoading(false)
@@ -164,7 +162,7 @@ export default function DashboardDG() {
     let manquantsTotal = 0, surplusTotal = 0, nbEcarts = 0
     ;(manquantsData || []).forEach(f => {
       const e = getEcart(f)
-      const restant = Math.abs(e) - (f.montant_regularise || 0)
+      const restant = getRestant(f)
       if (restant <= 0) return
       if (e > 0) { manquantsTotal += restant; nbEcarts++ }
       else if (e < 0) { surplusTotal += restant; nbEcarts++ }
@@ -362,29 +360,30 @@ export default function DashboardDG() {
       date_debut: obj.date_debut || '',
       date_fin: obj.date_fin || '',
       statut_objectif: obj.statut_objectif || 'actif',
-      cible_montant_smart: obj.cible_montant_smart || 0,
-      cible_montant_caisse: obj.cible_montant_caisse || 0,
-      cible_commissions: obj.cible_commissions || 0,
-      cible_comptes_dat: obj.cible_comptes_dat || 6,
-      cible_adhesions: obj.cible_adhesions || 5,
-      cible_lyde_cash: obj.cible_lyde_cash || 3,
-      cible_reactivations_nb: obj.cible_reactivations_nb || 3,
-      cible_reactivations_montant: obj.cible_reactivations_montant || 0,
-      cible_augmentations_nb: obj.cible_augmentations_nb || 3,
-      cible_augmentations_montant: obj.cible_augmentations_montant || 0,
-      cible_assurances_nb: obj.cible_assurances_nb || 0,
-      cible_assurances_montant: obj.cible_assurances_montant || 0,
-      cible_depot_pe: obj.cible_depot_pe || 0,
-      cible_depot_dat: obj.cible_depot_dat || 0,
-      cible_depot_dav: obj.cible_depot_dav || 0,
+      cible_montant_smart: obj.cible_montant_smart ?? 0,
+      cible_montant_caisse: obj.cible_montant_caisse ?? 0,
+      cible_commissions: obj.cible_commissions ?? 0,
+      cible_comptes_dat: obj.cible_comptes_dat ?? 6,
+      cible_adhesions: obj.cible_adhesions ?? 5,
+      cible_lyde_cash: obj.cible_lyde_cash ?? 3,
+      cible_reactivations_nb: obj.cible_reactivations_nb ?? 3,
+      cible_reactivations_montant: obj.cible_reactivations_montant ?? 0,
+      cible_augmentations_nb: obj.cible_augmentations_nb ?? 3,
+      cible_augmentations_montant: obj.cible_augmentations_montant ?? 0,
+      cible_assurances_nb: obj.cible_assurances_nb ?? 0,
+      cible_assurances_montant: obj.cible_assurances_montant ?? 0,
+      cible_depot_pe: obj.cible_depot_pe ?? 0,
+      cible_depot_dat: obj.cible_depot_dat ?? 0,
+      cible_depot_dav: obj.cible_depot_dav ?? 0,
       description: obj.description || '',
     })
     setShowObjectifModal(true)
   }
 
-  async function loadFiches(resp?: any) {
-    // Pour admin et DG (sans filtre agence) :
-    const { data } = await supabase
+  async function loadFiches() {
+    setFichesLoading(true)
+    setFichesError('')
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('fiches_journalieres')
       .select(`
         *,
@@ -394,8 +393,17 @@ export default function DashboardDG() {
         assurances_details(*)
       `)
       .order('date', { ascending: false })
-      .limit(100)
-      setFiches((data || []).filter(Boolean))
+      .order('id', { ascending: false })
+      .range(from, to))
+
+    if (error) {
+      console.error('DG loadFiches:', error.message, error.hint)
+      setFichesError(error.message)
+      setFichesLoading(false)
+      return
+    }
+    setFiches((data || []).filter(Boolean))
+    setFichesLoading(false)
   }
 
   async function loadAlertes() {
@@ -951,8 +959,8 @@ export default function DashboardDG() {
                                   </div>
                                   <div className="flex gap-1">
                                     <span className="text-xs px-2 py-0.5 rounded-full"
-                                      style={{ backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' : f.statut_validation === 'rejetee' ? '#FEE2E2' : '#FEF9C3', color: f.statut_validation === 'validee' ? '#166534' : f.statut_validation === 'rejetee' ? '#991B1B' : '#854D0E' }}>
-                                      {f.statut_validation === 'validee' ? '✅' : f.statut_validation === 'rejetee' ? '❌' : '⏳'}
+                                      style={{ backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' : '#FEF9C3', color: f.statut_validation === 'validee' ? '#166534' : '#854D0E' }}>
+                                      {f.statut_validation === 'validee' ? '✅' : f.statut_validation === 'a_corriger' ? '🔄' : '⏳'}
                                     </span>
                                     {ecart !== 0 && (
                                       <span className="text-xs px-2 py-0.5 rounded-full"
@@ -1207,11 +1215,23 @@ export default function DashboardDG() {
                   </div>
                 </div>
 
+                {fichesLoading && (
+                  <div className="bg-white rounded-2xl p-4 border border-gray-100 text-sm" style={{ color: '#818387' }}>
+                    Chargement de l&apos;historique complet…
+                  </div>
+                )}
+                {fichesError && (
+                  <div role="alert" className="rounded-2xl p-4 flex items-center justify-between gap-3" style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+                    <span className="text-sm">Impossible de charger les fiches : {fichesError}</span>
+                    <button type="button" onClick={() => loadFiches()} className="text-xs font-semibold underline">Réessayer</button>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-4 gap-3">
                   {[
                     { label: 'Total', value: fiches.length, bg: '#EEF2FF', color: '#2A4E94' },
                     { label: 'Validées', value: fiches.filter(f => f.statut_validation === 'validee').length, bg: '#F0FDF4', color: '#166534' },
-                    { label: 'Rejetées', value: fiches.filter(f => f.statut_validation === 'rejetee').length, bg: '#FEF2F2', color: '#991B1B' },
+                    { label: 'À corriger', value: fiches.filter(f => f.statut_validation === 'a_corriger').length, bg: '#FEF9C3', color: '#854D0E' },
                     { label: 'En attente', value: fiches.filter(f => !f.statut_validation || f.statut_validation === 'en_attente').length, bg: '#FEF9C3', color: '#854D0E' },
                   ].map(s => (
                     <div key={s.label} className="bg-white rounded-2xl p-4 border border-gray-100 text-center">
@@ -1238,7 +1258,6 @@ export default function DashboardDG() {
                       className="px-3 py-2 rounded-xl border text-xs outline-none" style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
                       <option value="tous">Tous les statuts</option>
                       <option value="validee">✅ Validée</option>
-                      <option value="rejetee">❌ Rejetée</option>
                       <option value="a_corriger">🔄 À corriger</option>
                       <option value="en_attente">⏳ En attente</option>
                     </select>
@@ -1299,8 +1318,8 @@ export default function DashboardDG() {
                               </td>
                               <td className="px-3 py-3">
                                 <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                  style={{ backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' : f.statut_validation === 'rejetee' ? '#FEE2E2' : f.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF', color: f.statut_validation === 'validee' ? '#166534' : f.statut_validation === 'rejetee' ? '#991B1B' : f.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94' }}>
-                                  {f.statut_validation === 'validee' ? '✅ Validée' : f.statut_validation === 'rejetee' ? '❌ Rejetée' : f.statut_validation === 'a_corriger' ? '🔄 À corriger' : '⏳ En attente'}
+                                  style={{ backgroundColor: f.statut_validation === 'validee' ? '#DCFCE7' : f.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF', color: f.statut_validation === 'validee' ? '#166534' : f.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94' }}>
+                                  {f.statut_validation === 'validee' ? '✅ Validée' : f.statut_validation === 'a_corriger' ? '🔄 À corriger' : '⏳ En attente'}
                                 </span>
                               </td>
                             </tr>

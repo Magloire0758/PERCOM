@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation'
 import FicheDetail from '@/components/FicheDetail'
 import RegularisationModal from '@/components/RegularisationModal'   // ← AJOUTER
 import EcartHistorique from '@/components/EcartHistorique'           // ← AJOUTER
+import { getEcart, getRestant } from '@/lib/ecarts'
+import { fetchAllRows } from '@/lib/supabase-pagination'
 
 type Tab = 'dashboard' | 'agences' | 'agents' | 'objectifs' | 'fiches' | 'alertes' | 'parametres' | 'equipes' | 'permissions' | 'manquants'
 
@@ -114,6 +116,8 @@ const [objectifForm, setObjectifForm] = useState({
 
 // Fiches
 const [fiches, setFiches] = useState<any[]>([])
+const [fichesLoading, setFichesLoading] = useState(false)
+const [fichesError, setFichesError] = useState('')
 const [ficheSearch, setFicheSearch] = useState('')
 const [ficheFilterAgence, setFicheFilterAgence] = useState('tous')
 const [ficheFilterStatut, setFicheFilterStatut] = useState('tous')
@@ -177,12 +181,8 @@ const [manquantFilterStatut, setManquantFilterStatut] = useState('non_regle')
 const [manquantFilterDateDebut, setManquantFilterDateDebut] = useState('')
 const [manquantFilterDateFin, setManquantFilterDateFin] = useState('')
 const [selectedManquant, setSelectedManquant] = useState<any>(null)
-const [showReglementModal, setShowReglementModal] = useState(false)
-const [reglementFiche, setReglementFiche] = useState<any>(null)
 const [showRegulModal, setShowRegulModal] = useState(false)
 const [regulFiche, setRegulFiche] = useState<any>(null)
-const [reglementCommentaire, setReglementCommentaire] = useState('')
-const [reglementLoading, setReglementLoading] = useState(false)
 
 // Zones agents
 const [agentZones, setAgentZones] = useState<any[]>([])
@@ -198,17 +198,6 @@ const [equipeZoneLoading, setEquipeZoneLoading] = useState(false)
 
   const today = new Date().toISOString().split('T')[0]
   const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-  const getEcart = (f: any) => {
-    if (!f) return 0
-    return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
-  }
-
-  const getRestant = (f: any) => {
-    if (!f) return 0
-    return Math.abs(getEcart(f)) - (f.montant_regularise || 0)
-  }
-
-
 useEffect(() => {
   if (tab === 'agents') loadAgentsData()
   if (tab === 'objectifs') loadObjectifs()
@@ -270,7 +259,11 @@ useEffect(() => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { router.push('/login'); return }
     const { data: me } = await supabase.from('agents').select('*').eq('user_id', user.id).single()
-    if (!me || me.role !== 'admin') { router.push('/login'); return }
+    if (!me || me.role !== 'admin' || me.statut !== 'actif' || me.actif !== true) {
+      await supabase.auth.signOut()
+      router.push('/login')
+      return
+    }
     setAdmin(me)
 
     await Promise.all([loadStats(), loadAgences(), loadAgentsData(), loadObjectifs(), loadFiches()])
@@ -332,7 +325,7 @@ useEffect(() => {
     let manquantsTotal = 0, surplusTotal = 0, nbEcarts = 0
     ;(manquants || []).forEach(f => {
       const e = getEcart(f)
-      const restant = Math.abs(e) - (f.montant_regularise || 0)
+      const restant = getRestant(f)
       if (restant <= 0) return
       if (e > 0) { manquantsTotal += restant; nbEcarts++ }
       else if (e < 0) { surplusTotal += restant; nbEcarts++ }
@@ -617,16 +610,6 @@ useEffect(() => {
     setDeleteAgentConfirm(null)
   }
   
-  async function validerFiche(ficheId: string) {
-    await supabase.from('fiches_journalieres').update({ valide_chef: true }).eq('id', ficheId)
-    setAgentFiches(prev => prev.map(f => f.id === ficheId ? { ...f, valide_chef: true } : f))
-  }
-  
-  async function confirmerManquant(ficheId: string) {
-    await supabase.from('fiches_journalieres').update({ manquant_regle: true }).eq('id', ficheId)
-    setAgentFiches(prev => prev.map(f => f.id === ficheId ? { ...f, manquant_regle: true } : f))
-  }
-
   async function loadObjectifs() {
     const { data } = await supabase
       .from('objectifs')
@@ -740,21 +723,21 @@ useEffect(() => {
       date_debut: obj.date_debut || '',
       date_fin: obj.date_fin || '',
       statut_objectif: obj.statut_objectif || 'actif',
-      cible_montant_smart: obj.cible_montant_smart || 0,
-      cible_montant_caisse: obj.cible_montant_caisse || 0,
-      cible_commissions: obj.cible_commissions || 0,
-      cible_comptes_dat: obj.cible_comptes_dat || 6,
-      cible_adhesions: obj.cible_adhesions || 5,
-      cible_lyde_cash: obj.cible_lyde_cash || 3,
-      cible_reactivations_nb: obj.cible_reactivations_nb || 3,
-      cible_reactivations_montant: obj.cible_reactivations_montant || 0,
-      cible_augmentations_nb: obj.cible_augmentations_nb || 3,
-      cible_augmentations_montant: obj.cible_augmentations_montant || 0,
-      cible_assurances_nb: obj.cible_assurances_nb || 0,
-      cible_assurances_montant: obj.cible_assurances_montant || 0,
-      cible_depot_pe: obj.cible_depot_pe || 0,
-      cible_depot_dat: obj.cible_depot_dat || 0,
-      cible_depot_dav: obj.cible_depot_dav || 0,
+      cible_montant_smart: obj.cible_montant_smart ?? 0,
+      cible_montant_caisse: obj.cible_montant_caisse ?? 0,
+      cible_commissions: obj.cible_commissions ?? 0,
+      cible_comptes_dat: obj.cible_comptes_dat ?? 6,
+      cible_adhesions: obj.cible_adhesions ?? 5,
+      cible_lyde_cash: obj.cible_lyde_cash ?? 3,
+      cible_reactivations_nb: obj.cible_reactivations_nb ?? 3,
+      cible_reactivations_montant: obj.cible_reactivations_montant ?? 0,
+      cible_augmentations_nb: obj.cible_augmentations_nb ?? 3,
+      cible_augmentations_montant: obj.cible_augmentations_montant ?? 0,
+      cible_assurances_nb: obj.cible_assurances_nb ?? 0,
+      cible_assurances_montant: obj.cible_assurances_montant ?? 0,
+      cible_depot_pe: obj.cible_depot_pe ?? 0,
+      cible_depot_dat: obj.cible_depot_dat ?? 0,
+      cible_depot_dav: obj.cible_depot_dav ?? 0,
       description: obj.description || '',
     })
     setShowObjectifModal(true)
@@ -875,10 +858,18 @@ useEffect(() => {
     setCreateUserError('')
   
     try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const callerToken = sessionData.session?.access_token
+      if (!callerToken) {
+        setCreateUserError('Session expirée. Reconnectez-vous.')
+        setCreateUserLoading(false)
+        return
+      }
+
       const res = await fetch('/api/admin/create-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(createUserForm),
+        body: JSON.stringify({ ...createUserForm, callerToken }),
       })
       const data = await res.json()
   
@@ -1008,44 +999,10 @@ useEffect(() => {
       setManquants((data || []).filter(f => f && getEcart(f) !== 0))
   }
   
-  async function confirmerReglement(ficheId: string, commentaire?: string) {
-    setReglementLoading(true)
-    await supabase.from('fiches_journalieres').update({
-      manquant_regle: true,
-      manquant_regle_at: new Date().toISOString(),
-      manquant_regle_par: admin?.id || null,
-      commentaire_chef: commentaire || null,
-    }).eq('id', ficheId)
-  
-    // Notification à l'agent
-    const fiche = manquants.find(f => f.id === ficheId)
-    if (fiche) {
-      const ecart = getEcart(fiche)
-      const isManquant = ecart > 0
-      const montant = Math.abs(ecart)
-      await supabase.from('notifications').insert({
-        agent_id: fiche.agent_id,
-        type: 'validation',
-        titre: isManquant ? '✅ Manquant réglé' : '✅ Surplus régularisé',
-        message: isManquant
-          ? `Votre manquant de ${montant.toLocaleString()} FCFA (fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')}) a été confirmé comme réglé.${commentaire ? ` Note: ${commentaire}` : ''}`
-          : `Votre surplus de ${montant.toLocaleString()} FCFA (fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')}) a été régularisé.${commentaire ? ` Note: ${commentaire}` : ''}`,
-      })
-    }
-  
-    setManquants(prev => prev.map(f => f.id === ficheId
-      ? { ...f, manquant_regle: true, manquant_regle_at: new Date().toISOString() } : f))
-    if (selectedManquant?.id === ficheId)
-      setSelectedManquant((p: any) => ({ ...p, manquant_regle: true }))
-  
-    setShowReglementModal(false)
-    setReglementCommentaire('')
-    setReglementLoading(false)
-    loadStats()
-  }
-
   async function loadFiches() {
-    const { data, error } = await supabase
+    setFichesLoading(true)
+    setFichesError('')
+    const { data, error } = await fetchAllRows((from, to) => supabase
       .from('fiches_journalieres')
       .select(`
         *,
@@ -1055,62 +1012,63 @@ useEffect(() => {
         assurances_details(*)
       `)
       .order('date', { ascending: false })
-      .limit(100)
+      .order('id', { ascending: false })
+      .range(from, to))
 
-    if (error) { console.error('ADMIN loadFiches:', error.message, error.hint); setFiches([]); return }
-    console.log('ADMIN fiches chargées:', data?.length)
+    if (error) {
+      console.error('ADMIN loadFiches:', error.message, error.hint)
+      setFichesError(error.message)
+      setFichesLoading(false)
+      return
+    }
     setFiches((data || []).filter(Boolean))
+    setFichesLoading(false)
   }
   
   async function validerFicheAdmin(ficheId: string, statut: string, commentaire?: string) {
-    const { data: agentData } = await supabase
-      .from('agents').select('id').eq('user_id', (await supabase.auth.getUser()).data.user?.id || '').single()
-  
-    await supabase.from('fiches_journalieres').update({
-      valide_chef: statut === 'validee',
-      statut_validation: statut,
-      commentaire_chef: commentaire || null,
-      valide_par: agentData?.id || null,
-    }).eq('id', ficheId)
-  
-    // Notification automatique à l'agent
-    const fiche = fiches.find(f => f.id === ficheId)
-    if (fiche) {
-      const titres: Record<string, string> = {
-        validee: '✅ Fiche validée',
-        rejetee: '❌ Fiche rejetée',
-        a_corriger: '🔄 Fiche à corriger',
-      }
-      const messages: Record<string, string> = {
-        validee: `Votre fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')} a été validée.`,
-        rejetee: `Votre fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')} a été rejetée.${commentaire ? ` Motif: ${commentaire}` : ''}`,
-        a_corriger: `Votre fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')} nécessite des corrections.${commentaire ? ` Note: ${commentaire}` : ''}`,
-      }
-      await supabase.from('notifications').insert({
-        agent_id: fiche.agent_id,
-        type: statut === 'validee' ? 'validation' : statut === 'rejetee' ? 'rejet' : 'correction',
-        titre: titres[statut],
-        message: messages[statut],
-      })
+    if (!admin?.id) {
+      alert('Session administrateur invalide. Veuillez vous reconnecter.')
+      return false
     }
   
+    const action = statut === 'validee' ? 'valider' : 'demander_correction'
+    const commentaireNettoye = commentaire?.trim() || null
+    if (action === 'demander_correction' && !commentaireNettoye) {
+      alert('Indiquez ce qui doit être corrigé.')
+      return false
+    }
+
+    const { data, error: validationError } = await supabase.rpc('traiter_validation_fiche', {
+      p_fiche_id: ficheId,
+      p_action: action,
+      p_commentaire: commentaireNettoye,
+    })
+
+    if (validationError) {
+      alert(`Validation impossible : ${validationError.message}`)
+      return false
+    }
+  
+    if (!data?.ok) {
+      alert(data?.erreur || data?.message || 'La décision n’a pas pu être enregistrée.')
+      return false
+    }
+
+    const nouveauStatut = data.statut || (action === 'valider' ? 'validee' : 'a_corriger')
+  
     setFiches(prev => prev.map(f => f.id === ficheId ? {
-      ...f, valide_chef: statut === 'validee',
-      statut_validation: statut, commentaire_chef: commentaire || null
+      ...f, valide_chef: nouveauStatut === 'validee',
+      statut_validation: nouveauStatut, commentaire_chef: commentaireNettoye
     } : f))
     if (selectedFiche?.id === ficheId) setSelectedFiche((p: any) => ({
-      ...p, valide_chef: statut === 'validee',
-      statut_validation: statut, commentaire_chef: commentaire || null
+      ...p, valide_chef: nouveauStatut === 'validee',
+      statut_validation: nouveauStatut, commentaire_chef: commentaireNettoye
     }))
-  }
-  
-  async function confirmerManquantAdmin(ficheId: string) {
-    await supabase.from('fiches_journalieres').update({
-      manquant_regle: true,
-      manquant_regle_at: new Date().toISOString(),
-    }).eq('id', ficheId)
-    setFiches(prev => prev.map(f => f.id === ficheId ? { ...f, manquant_regle: true } : f))
-    if (selectedFiche?.id === ficheId) setSelectedFiche((p: any) => ({ ...p, manquant_regle: true }))
+    setAgentFiches(prev => prev.map(f => f.id === ficheId ? {
+      ...f, valide_chef: nouveauStatut === 'validee',
+      statut_validation: nouveauStatut, commentaire_chef: commentaireNettoye,
+    } : f))
+    return true
   }
   
   async function deleteFiche(ficheId: string) {
@@ -2082,14 +2040,19 @@ useEffect(() => {
                         </div>
                         <div className="flex gap-1">
                           {!f.valide_chef && (
-                            <button type="button" onClick={() => validerFiche(f.id)}
+                            <button type="button" onClick={() => {
+                              setValidationFiche(f)
+                              setValidationStatut('validee')
+                              setValidationCommentaire('')
+                              setShowValidationModal(true)
+                            }}
                               className="px-2 py-1 rounded-lg text-xs font-medium"
                               style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
                               ✅ Valider
                             </button>
                           )}
                           {ecart !== 0 && !f.manquant_regle && (
-                            <button type="button" onClick={() => confirmerManquant(f.id)}
+                            <button type="button" onClick={() => { setRegulFiche(f); setShowRegulModal(true) }}
                               className="px-2 py-1 rounded-lg text-xs font-medium"
                               style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
                               💰 Réglé
@@ -2340,6 +2303,18 @@ useEffect(() => {
     {/* Liste fiches */}
     <div className={`flex flex-col space-y-4 transition-all ${selectedFiche ? 'w-1/2' : 'w-full'}`}>
 
+      {fichesLoading && (
+        <div className="bg-white rounded-2xl p-4 border border-gray-100 text-sm" style={{ color: '#818387' }}>
+          Chargement de l&apos;historique complet…
+        </div>
+      )}
+      {fichesError && (
+        <div role="alert" className="rounded-2xl p-4 flex items-center justify-between gap-3" style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+          <span className="text-sm">Impossible de charger les fiches : {fichesError}</span>
+          <button type="button" onClick={() => loadFiches()} className="text-xs font-semibold underline">Réessayer</button>
+        </div>
+      )}
+
       {/* Stats rapides */}
       <div className="grid grid-cols-4 gap-3">
         {[
@@ -2384,7 +2359,6 @@ useEffect(() => {
             style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}>
             <option value="tous">Tous les statuts</option>
             <option value="validee">✅ Validée</option>
-            <option value="rejetee">❌ Rejetée</option>
             <option value="a_corriger">🔄 À corriger</option>
             <option value="en_attente">⏳ En attente</option>
           </select>
@@ -2495,15 +2469,12 @@ useEffect(() => {
                         style={{
                           backgroundColor:
                             f.statut_validation === 'validee' ? '#DCFCE7' :
-                            f.statut_validation === 'rejetee' ? '#FEE2E2' :
                             f.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF',
                           color:
                             f.statut_validation === 'validee' ? '#166534' :
-                            f.statut_validation === 'rejetee' ? '#991B1B' :
                             f.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94'
                         }}>
                         {f.statut_validation === 'validee' ? '✅ Validée' :
-                        f.statut_validation === 'rejetee' ? '❌ Rejetée' :
                         f.statut_validation === 'a_corriger' ? '🔄 À corriger' : '⏳ En attente'}
                       </span>
                     </td>
@@ -2522,7 +2493,7 @@ useEffect(() => {
                           style={{ backgroundColor: '#F0FDF4', color: '#166634' }}>✅</button>
                       )}
                           {ecart !== 0 && !f.manquant_regle && (
-                            <button type="button" onClick={() => confirmerManquantAdmin(f.id)}
+                            <button type="button" onClick={() => { setRegulFiche(f); setShowRegulModal(true) }}
                               className="p-1.5 rounded-lg" title="Confirmer manquant réglé"
                               style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>💰</button>
                           )}
@@ -4216,12 +4187,11 @@ useEffect(() => {
           <label className="block text-xs font-semibold mb-3" style={{ color: '#1a1a2e' }}>
             Décision *
           </label>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {[
               { key: 'validee', label: '✅ Valider', bg: '#F0FDF4', color: '#166534', activeBg: '#166534' },
-              { key: 'rejetee', label: '❌ Rejeter', bg: '#FEF2F2', color: '#991B1B', activeBg: '#991B1B' },
-              { key: 'a_corriger', label: '🔄 Corriger', bg: '#FEF9C3', color: '#854D0E', activeBg: '#854D0E' },
-            ].map(s => (
+              { key: 'a_corriger', label: '🔄 Demander une correction', bg: '#FEF9C3', color: '#854D0E', activeBg: '#854D0E' },
+            ].filter(s => s.key === 'validee' || !validationFiche.statut_validation || validationFiche.statut_validation === 'en_attente').map(s => (
               <button key={s.key} type="button"
                 onClick={() => setValidationStatut(s.key)}
                 className="py-3 rounded-xl text-xs font-semibold transition-all"
@@ -4249,7 +4219,6 @@ useEffect(() => {
             style={{ borderColor: '#e2e8f0' }}
             placeholder={
               validationStatut === 'validee' ? 'Bravo pour cette fiche ! (optionnel)' :
-              validationStatut === 'rejetee' ? 'Expliquez le motif du rejet...' :
               'Indiquez ce qui doit être corrigé...'
             } />
         </div>
@@ -4272,15 +4241,15 @@ useEffect(() => {
           </button>
           <button type="button"
             onClick={async () => {
-              await validerFicheAdmin(validationFiche.id, validationStatut, validationCommentaire)
-              setShowValidationModal(false)
-              setValidationCommentaire('')
+              const ok = await validerFicheAdmin(validationFiche.id, validationStatut, validationCommentaire)
+              if (ok) {
+                setShowValidationModal(false)
+                setValidationCommentaire('')
+              }
             }}
             className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
             style={{
-              backgroundColor:
-                validationStatut === 'validee' ? '#166534' :
-                validationStatut === 'rejetee' ? '#991B1B' : '#854D0E'
+              backgroundColor: validationStatut === 'validee' ? '#166534' : '#854D0E'
             }}>
             Confirmer la décision
           </button>

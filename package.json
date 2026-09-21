@@ -6,14 +6,17 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:agent": "node scripts/test-agent-reporting.cjs && node scripts/test-team-reporting.cjs && node scripts/test-agency-reporting.cjs && node scripts/test-agent-export-route.cjs"
   },
   "dependencies": {
     "@next/font": "^14.2.15",
+    "@react-pdf/renderer": "^4.9.0",
     "@supabase/ssr": "^0.10.3",
     "@supabase/supabase-js": "^2.105.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "exceljs": "^4.4.0",
     "lucide-react": "^1.14.0",
     "next": "16.2.6",
     "radix-ui": "^1.4.3",
@@ -22,6 +25,11 @@
     "shadcn": "^4.7.0",
     "tailwind-merge": "^3.6.0",
     "tw-animate-css": "^1.4.0"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

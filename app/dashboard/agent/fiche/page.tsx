@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation';
 
 interface Reactivation {
   id?: string
@@ -100,7 +100,16 @@ export default function FicheJournaliere() {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) { router.push('/login'); return }
     const { data: a } = await supabase.from('agents').select('*').eq('user_id', user.id).single()
-    if (!a) { router.push('/login'); return }
+    if (
+      !a ||
+      !['agent', 'chef'].includes(a.role) ||
+      a.statut !== 'actif' ||
+      a.actif !== true
+    ) {
+      await supabase.auth.signOut()
+      router.push('/login')
+      return
+    }
     setAgent(a)
 
     // ── MODE ÉDITION ──
@@ -221,17 +230,11 @@ export default function FicheJournaliere() {
     if (!agent) return
     setLoading(true)
 
-    const payload = {
-      agent_id: agent.id,
-      equipe_id: agent.equipe_id || null,
+    const fiche = {
       date: dateFiche,
-      heure_soumission: new Date().toISOString(),
       comptes_ouverts_dat: parseInt(form.comptes_ouverts_dat) || 0,
-      comptes_ouverts: parseInt(form.comptes_ouverts_dat) || 0,
       montant_smart: montantSmart,
       montant_caisse: montantCaisse,
-      montant_mobilise: montantSmart,
-      montant_rapporte: montantCaisse,
       commission_jour: parseFloat(form.commission_jour) || 0,
       nb_clients_parcourus: parseInt(form.nb_clients_parcourus) || 0,
       nb_adhesions: parseInt(form.nb_adhesions) || 0,
@@ -240,54 +243,41 @@ export default function FicheJournaliere() {
       montant_depot_dat: parseFloat(form.montant_depot_dat) || 0,
       montant_depot_dav: parseFloat(form.montant_depot_dav) || 0,
       observations: form.observations || null,
-      statut_validation: 'en_attente',
-      valide_chef: false,
-      commentaire_chef: null,
-      valide_par: null,
     }
 
-    let ficheId = editParam
-
-    if (isEdit) {
-      const { error } = await supabase.from('fiches_journalieres').update(payload).eq('id', editParam)
-      if (error) { setLoading(false); alert('Erreur : ' + error.message); return }
-      // Purge des sous-tables
-      await Promise.all([
-        supabase.from('reactivations').delete().eq('fiche_id', editParam),
-        supabase.from('augmentations_mise').delete().eq('fiche_id', editParam),
-        supabase.from('assurances_details').delete().eq('fiche_id', editParam),
-      ])
-    } else {
-      const { data, error } = await supabase.from('fiches_journalieres')
-        .insert({ ...payload, manquant_regle: false }).select().single()
-      if (error) { setLoading(false); alert('Erreur : ' + error.message); return }
-      ficheId = data.id
-    }
-
-    // Réinsertion des sous-tables
     const reactData = reactivations.filter(r => r.nom_prenom.trim() !== '').map(r => ({
-      fiche_id: ficheId, agent_id: agent.id,
       n_client: r.n_client || null, nom_prenom: r.nom_prenom, produit: r.produit || 'TONTINE',
       mise: parseFloat(r.mise) || 0, nouvelle_mise: parseFloat(r.nouvelle_mise) || 0,
       montant_cotise: parseFloat(r.montant_cotise) || 0, reactif: r.reactif,
       commentaire: r.commentaire || null,
     }))
-    if (reactData.length > 0) await supabase.from('reactivations').insert(reactData)
 
     const augData = augmentations.filter(a => a.nom_client.trim() !== '').map(a => ({
-      fiche_id: ficheId, agent_id: agent.id,
       nom_client: a.nom_client, ancienne_mise: parseFloat(a.ancienne_mise) || 0,
       nouvelle_mise: parseFloat(a.nouvelle_mise) || 0, motif: a.motif || 'EPARGNE',
     }))
-    if (augData.length > 0) await supabase.from('augmentations_mise').insert(augData)
 
     const assurData = assurances.filter(a => (parseInt(a.nb) || 0) > 0).map(a => ({
-      fiche_id: ficheId, agent_id: agent.id,
       type_assurance: a.type_assurance, nb: parseInt(a.nb) || 0, montant: parseFloat(a.montant) || 0,
     }))
-    if (assurData.length > 0) await supabase.from('assurances_details').insert(assurData)
+
+    const { data, error } = await supabase.rpc('enregistrer_fiche_complete', {
+      p_fiche: fiche,
+      p_reactivations: reactData,
+      p_augmentations: augData,
+      p_assurances: assurData,
+      p_fiche_id: isEdit ? editParam : null,
+    })
 
     setLoading(false)
+    if (error) {
+      alert('Enregistrement impossible : ' + error.message)
+      return
+    }
+    if (!data?.ok) {
+      alert(data?.erreur || data?.message || 'La fiche n’a pas pu être enregistrée.')
+      return
+    }
     setSubmitted(true)
   }
 
@@ -308,7 +298,7 @@ export default function FicheJournaliere() {
         <div className="text-5xl mb-4">🔒</div>
         <h2 className="text-lg font-bold mb-2" style={{ color: '#991B1B' }}>Action impossible</h2>
         <p className="text-sm mb-6" style={{ color: '#818387' }}>{erreurAcces}</p>
-        <button onClick={() => router.push('/dashboard/agent')}
+        <button onClick={() => router.push(agent?.role === 'chef' ? '/dashboard/chef' : '/dashboard/agent')}
           className="w-full py-3 rounded-xl text-white font-semibold text-sm"
           style={{ backgroundColor: '#2A4E94' }}>
           Retour au dashboard
@@ -332,7 +322,7 @@ export default function FicheJournaliere() {
           <br />
           {isEdit ? 'Elle repart en validation.' : 'En attente de validation.'}
         </p>
-        <button onClick={() => router.push('/dashboard/agent')}
+        <button onClick={() => router.push(agent?.role === 'chef' ? '/dashboard/chef' : '/dashboard/agent')}
           className="w-full py-3 rounded-xl text-white font-semibold text-sm"
           style={{ backgroundColor: '#2A4E94' }}>
           Retour au dashboard
@@ -350,7 +340,7 @@ export default function FicheJournaliere() {
 
         {/* Header */}
         <div className="mb-6">
-          <button onClick={() => router.push('/dashboard/agent')}
+          <button onClick={() => router.push(agent?.role === 'chef' ? '/dashboard/chef' : '/dashboard/agent')}
             className="flex items-center gap-2 text-sm mb-4" style={{ color: '#818387' }}>
             ← Retour
           </button>

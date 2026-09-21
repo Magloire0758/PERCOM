@@ -31,8 +31,6 @@ export default function FicheDetail({
 
   const statutColor = fiche.statut_validation === 'validee'
     ? { bg: '#DCFCE7', color: '#166534', label: '✅ Validée' }
-    : fiche.statut_validation === 'rejetee'
-    ? { bg: '#FEE2E2', color: '#991B1B', label: '❌ Rejetée' }
     : fiche.statut_validation === 'a_corriger'
     ? { bg: '#FEF9C3', color: '#854D0E', label: '🔄 À corriger' }
     : { bg: '#EEF2FF', color: '#2A4E94', label: '⏳ En attente' }
@@ -307,9 +305,9 @@ export default function FicheDetail({
           <div className="rounded-xl p-3 flex items-start gap-2"
             style={{
               backgroundColor: fiche.statut_validation === 'validee' ? '#F0FDF4' :
-                fiche.statut_validation === 'rejetee' ? '#FEF2F2' : '#FEF9C3'
+                fiche.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF'
             }}>
-            <span>{fiche.statut_validation === 'validee' ? '✅' : fiche.statut_validation === 'rejetee' ? '❌' : '🔄'}</span>
+            <span>{fiche.statut_validation === 'validee' ? '✅' : fiche.statut_validation === 'a_corriger' ? '🔄' : '⏳'}</span>
             <p className="text-sm" style={{ color: statutColor.color }}>{fiche.commentaire_chef}</p>
           </div>
         </div>

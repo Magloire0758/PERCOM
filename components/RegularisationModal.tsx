@@ -2,9 +2,20 @@
 
 import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { FicheAvecEcart, getEcart, getRestant } from '@/lib/ecarts'
+
+interface FicheRegularisable extends FicheAvecEcart {
+  id: string
+  date: string
+  agents?: {
+    nom?: string | null
+    prenom?: string | null
+    agences?: { nom?: string | null } | null
+  } | null
+}
 
 interface Props {
-  fiche: any
+  fiche: FicheRegularisable
   onClose: () => void
   onSuccess: () => void
 }
@@ -20,13 +31,11 @@ export default function RegularisationModal({ fiche, onClose, onSuccess }: Props
 
   if (!fiche) return null
 
-  const smart = fiche.montant_smart ?? fiche.montant_mobilise ?? 0
-  const caisse = fiche.montant_caisse ?? fiche.montant_rapporte ?? 0
-  const ecart = smart - caisse
+  const ecart = getEcart(fiche)
   const isManquant = ecart > 0
   const ecartTotal = Math.abs(ecart)
   const dejaRegularise = fiche.montant_regularise || 0
-  const restant = ecartTotal - dejaRegularise
+  const restant = getRestant(fiche)
 
   const montantNum = parseFloat(montant) || 0
   const nouveauRestant = restant - montantNum
@@ -49,14 +58,16 @@ export default function RegularisationModal({ fiche, onClose, onSuccess }: Props
     // Upload pièce jointe
     let pieceUrl: string | null = null
     let pieceNom: string | null = null
+    let uploadedPath: string | null = null
     if (file) {
-      const ext = file.name.split('.').pop()
-      const path = `${fiche.id}/${Date.now()}.${ext}`
+      const ext = file.name.split('.').pop()?.toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin'
+      const path = `${fiche.id}/${crypto.randomUUID()}.${ext}`
       const { error: upErr } = await supabase.storage.from('regularisations').upload(path, file)
       if (upErr) { setSaving(false); setErreur('Erreur upload : ' + upErr.message); return }
       const { data: urlData } = supabase.storage.from('regularisations').getPublicUrl(path)
       pieceUrl = urlData.publicUrl
       pieceNom = file.name
+      uploadedPath = path
     }
 
     // Appel de la fonction RPC
@@ -70,11 +81,19 @@ export default function RegularisationModal({ fiche, onClose, onSuccess }: Props
       p_nom_client: isManquant ? null : nomClient.trim(),
     })
 
+    if (error || !data?.ok) {
+      if (uploadedPath) {
+        const { error: cleanupError } = await supabase.storage
+          .from('regularisations')
+          .remove([uploadedPath])
+        if (cleanupError) console.error('Pièce de régularisation orpheline non supprimée:', cleanupError.message)
+      }
+      setSaving(false)
+      setErreur(error?.message || data?.erreur || 'Erreur inconnue.')
+      return
+    }
+
     setSaving(false)
-
-    if (error) { setErreur(error.message); return }
-    if (!data?.ok) { setErreur(data?.erreur || 'Erreur inconnue.'); return }
-
     onSuccess()
     onClose()
   }

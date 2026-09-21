@@ -4,7 +4,11 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 import FicheDetail from '@/components/FicheDetail'
+import AgentInsights from '@/components/AgentInsights'
+import AgentExportButtons from '@/components/AgentExportButtons'
 import EcartHistorique from '@/components/EcartHistorique'   // ← AJOUTER
+import { getEcart, getRestant } from '@/lib/ecarts'
+import { fetchAllRows } from '@/lib/supabase-pagination'
 
 
 
@@ -20,11 +24,11 @@ export default function DashboardAgent() {
   // Data
   const [ficheDuJour, setFicheDuJour] = useState<any>(null)
   const [fiches, setFiches] = useState<any[]>([])
-  const [objectifs, setObjectifs] = useState<any[]>([])
+  const [fichesLoading, setFichesLoading] = useState(false)
+  const [fichesError, setFichesError] = useState('')
   const [notifications, setNotifications] = useState<any[]>([])
   const [messages, setMessages] = useState<any[]>([])
   const [contacts, setContacts] = useState<any[]>([])
-  const [classement, setClassement] = useState<any[]>([])
 
   // UI
   const [showNotifPanel, setShowNotifPanel] = useState(false)
@@ -86,7 +90,13 @@ export default function DashboardAgent() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' },
         (p) => { if (p.new.agent_id === agent.id) setNotifications(prev => [p.new, ...prev]) })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' },
-        (p) => { if (p.new.destinataire_id === agent.id) loadMessages(agent.id) })
+        async (p) => {
+          if (p.new.destinataire_id !== agent.id) return
+          if (selectedContact?.id === p.new.expediteur_id) {
+            await supabase.rpc('marquer_message_lu', { p_message_id: p.new.id })
+          }
+          loadMessages(agent.id)
+        })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'fiches_journalieres' },
         (p) => {
           if (p.new.agent_id === agent.id) {
@@ -96,7 +106,7 @@ export default function DashboardAgent() {
         })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [agent])
+  }, [agent, selectedContact])
 
   async function loadAll() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -105,7 +115,11 @@ export default function DashboardAgent() {
       .from('agents')
       .select('*, agences(nom), equipes!agents_equipe_id_fkey(nom)')
       .eq('user_id', user.id).single()
-    if (!a) { router.push('/login'); return }
+    if (!a || a.role !== 'agent' || a.statut !== 'actif' || a.actif !== true) {
+      await supabase.auth.signOut()
+      router.push('/login')
+      return
+    }
     setAgent(a)
     setProfilForm({ nom: a.nom || '', prenom: a.prenom || '', telephone: a.telephone || '' })
     setTheme(a.theme || 'light')
@@ -117,34 +131,33 @@ export default function DashboardAgent() {
     })
     await Promise.all([
       loadFiches(a.id),
-      loadObjectifs(a),
       loadNotifications(a.id),
       loadMessages(a.id),
-      loadClassement(a),
       loadMesZones(a.id),
     ])
     setLoading(false)
   }
 
   async function loadFiches(agentId: string) {
-    const { data: fiche } = await supabase
-      .from('fiches_journalieres')
-      .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
-      .eq('agent_id', agentId).eq('date', today).maybeSingle()
-    setFicheDuJour(fiche)
-  
-    const { data: all } = await supabase
-      .from('fiches_journalieres')
-      .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
-      .eq('agent_id', agentId).order('date', { ascending: false })
-    setFiches((all || []).filter(Boolean))
-  }
+    setFichesLoading(true)
+    setFichesError('')
+    const [ficheResult, historiqueResult] = await Promise.all([
+      supabase
+        .from('fiches_journalieres')
+        .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
+        .eq('agent_id', agentId).eq('date', today).maybeSingle(),
+      fetchAllRows((from, to) => supabase
+        .from('fiches_journalieres')
+        .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
+        .eq('agent_id', agentId).order('date', { ascending: false }).order('id', { ascending: false }).range(from, to)),
+    ])
 
-  async function loadObjectifs(a: any) {
-    const { data } = await supabase.from('objectifs').select('*')
-      .or(`agent_id.eq.${a.id},agence_id.eq.${a.agence_id || 'null'},type_cible.eq.global`)
-      .eq('statut_objectif', 'actif')
-    setObjectifs(data || [])
+    if (ficheResult.error || historiqueResult.error) {
+      setFichesError(ficheResult.error?.message || historiqueResult.error?.message || 'Lecture des fiches impossible.')
+    }
+    if (!ficheResult.error) setFicheDuJour(ficheResult.data)
+    if (!historiqueResult.error) setFiches((historiqueResult.data || []).filter(Boolean))
+    setFichesLoading(false)
   }
 
   async function loadNotifications(agentId: string) {
@@ -181,24 +194,35 @@ export default function DashboardAgent() {
     setMesZones(data || [])
   }
 
-  async function loadClassement(a: any) {
-    if (!a.agence_id) return
-    const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-    const { data: agentsAgence } = await supabase.from('agents')
-      .select('id, nom, prenom').eq('agence_id', a.agence_id).eq('statut', 'actif').eq('role', 'agent')
-    if (!agentsAgence?.length) return
-    const { data: fichesMois } = await supabase.from('fiches_journalieres')
-    .select('agent_id, montant_smart, montant_mobilise').gte('date', moisDebut)
-    .in('agent_id', agentsAgence.map(ag => ag.id))
-  const scores: Record<string, number> = {}
-  ;(fichesMois || []).forEach(f => { scores[f.agent_id] = (scores[f.agent_id] || 0) + (f.montant_smart ?? f.montant_mobilise ?? 0) })
-    setClassement(agentsAgence.map(ag => ({ ...ag, score: scores[ag.id] || 0 })).sort((a, b) => b.score - a.score))
-  }
-
   async function marquerNotifsLues() {
     if (!agent) return
-    await supabase.from('notifications').update({ lu: true }).eq('agent_id', agent.id).eq('lu', false)
-    setNotifications(prev => prev.map(n => ({ ...n, lu: true })))
+    const nonLues = notifications.filter(n => !n.lu)
+    if (nonLues.length === 0) return
+
+    const resultats = await Promise.all(nonLues.map(async notification => {
+      const { data, error } = await supabase.rpc('marquer_notification_lue', { p_notif_id: notification.id })
+      return !error && data?.ok ? notification.id : null
+    }))
+    const idsLus = new Set(resultats.filter((id): id is string => id !== null))
+    setNotifications(prev => prev.map(n => idsLus.has(n.id) ? { ...n, lu: true } : n))
+    if (idsLus.size !== nonLues.length) console.error('Certaines notifications n’ont pas pu être marquées comme lues.')
+  }
+
+  async function ouvrirConversation(contact: (typeof contacts)[number]) {
+    setSelectedContact(contact)
+    if (!agent) return
+    const aMarquer = messages.filter(message =>
+      message.expediteur_id === contact.id && message.destinataire_id === agent.id && !message.lu
+    )
+    if (aMarquer.length === 0) return
+
+    const resultats = await Promise.all(aMarquer.map(async message => {
+      const { data, error } = await supabase.rpc('marquer_message_lu', { p_message_id: message.id })
+      return !error && data?.ok ? message.id : null
+    }))
+    const idsLus = new Set(resultats.filter((id): id is string => id !== null))
+    setMessages(prev => prev.map(message => idsLus.has(message.id) ? { ...message, lu: true } : message))
+    if (idsLus.size !== aMarquer.length) console.error('Certains messages n’ont pas pu être marqués comme lus.')
   }
 
   async function envoyerMessage() {
@@ -249,39 +273,6 @@ export default function DashboardAgent() {
     router.push('/login')
   }
 
-  // ── Calculs ──
-// Helper écart
-const getEcart = (f: any) => {
-  if (!f) return 0
-  return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
-}
-
-const getRestant = (f: any) => {
-  if (!f) return 0
-  return Math.abs(getEcart(f)) - (f.montant_regularise || 0)
-}
-
-const fichesMois = fiches.filter(f => f && new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
-const totalComptesDat = fichesMois.reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0)
-const totalSmart = fichesMois.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
-const totalCaisse = fichesMois.reduce((s, f) => s + (f.montant_caisse ?? f.montant_rapporte ?? 0), 0)
-const totalCommissions = fichesMois.reduce((s, f) => s + (f.commission_jour || 0), 0)
-const totalAdhesions = fichesMois.reduce((s, f) => s + (f.nb_adhesions || 0), 0)
-const totalLydeCash = fichesMois.reduce((s, f) => s + (f.nb_abonnements_lyde_cash || 0), 0)
-const totalClientsParcourus = fichesMois.reduce((s, f) => s + (f.nb_clients_parcourus || 0), 0)
-const totalReactivations = fichesMois.reduce((s, f) => s + (f.reactivations?.length || 0), 0)
-const totalAugmentations = fichesMois.reduce((s, f) => s + (f.augmentations_mise?.length || 0), 0)
-const totalAssurancesNb = fichesMois.reduce((s, f) => s + (f.assurances_details?.reduce((a: number, x: any) => a + (x.nb || 0), 0) || 0), 0)
-const joursActifs = fichesMois.length
-// Taux de conformité : % de jours sans écart
-const joursSansEcart = fichesMois.filter(f => getEcart(f) === 0).length
-const tauxConformite = joursActifs > 0 ? Math.round((joursSansEcart / joursActifs) * 100) : 0
-const tauxRegularite = Math.min(100, Math.round((joursActifs / new Date().getDate()) * 100))
-const scoreMensuel = joursActifs > 0 ? Math.min(100, Math.round((totalComptesDat / (joursActifs * 6)) * 100)) : 0
-
-// Compat : totalCollecte = SMART
-const totalCollecte = totalSmart
-
   // Streak
   const streak = (() => {
     let count = 0
@@ -295,12 +286,11 @@ const totalCollecte = totalSmart
   })()
 
   const ecartsListe = fiches.filter(f => f && getEcart(f) !== 0)
-  const ecartsNonRegles = ecartsListe.filter(f => !f.manquant_regle)
+  const ecartsNonRegles = ecartsListe.filter(f => getRestant(f) > 0)
   const manquantsNonRegles = ecartsNonRegles.filter(f => getEcart(f) > 0)
   const surplusNonRegles = ecartsNonRegles.filter(f => getEcart(f) < 0)
   const totalManquants = manquantsNonRegles.reduce((s, f) => s + getRestant(f), 0)
   const totalSurplus = surplusNonRegles.reduce((s, f) => s + getRestant(f), 0)
-  const monRang = classement.findIndex(a => a.id === agent?.id) + 1
   const notifNonLues = notifications.filter(n => !n.lu).length
   const messagesNonLus = messages.filter(m => m.destinataire_id === agent?.id && !m.lu).length
 
@@ -312,13 +302,6 @@ const totalCollecte = totalSmart
     else { f = f.filter(x => new Date(x.date).getFullYear() === now.getFullYear()) }
     return f
   })()
-
-  const sept7Jours = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(); d.setDate(d.getDate() - (6 - i))
-    const dateStr = d.toISOString().split('T')[0]
-    const fiche = fiches.find(f => f.date === dateStr)
-    return { jour: d.toLocaleDateString('fr-FR', { weekday: 'short' }), montant: (fiche?.montant_smart ?? fiche?.montant_mobilise ?? 0), comptes: (fiche?.comptes_ouverts_dat ?? fiche?.comptes_ouverts ?? 0) }
-  })
 
   const messagesConv = selectedContact ? messages.filter(m =>
     (m.expediteur_id === agent?.id && m.destinataire_id === selectedContact.id) ||
@@ -457,32 +440,6 @@ const totalCollecte = totalSmart
 
               
 
-              {/* Score du mois */}
-              <div className="grid grid-cols-3 gap-3">
-              {[
-                  { label: 'Conformité', value: `${tauxConformite}%`, icon: '🎯' },
-                  { label: 'Régularité', value: `${tauxRegularite}%`, icon: '📅' },
-                  { label: 'Score', value: `${scoreMensuel}%`, icon: '⭐' },
-                ].map(s => (
-                  <div key={s.label} className="text-center p-3 rounded-xl"
-                    style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}>
-                    <div className="text-xl mb-1">{s.icon}</div>
-                    <div className="font-bold text-lg">{s.value}</div>
-                    <div className="text-xs opacity-75">{s.label}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Classement */}
-              {monRang > 0 && (
-                <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-xl"
-                  style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}>
-                  <span className="text-lg">🏆</span>
-                  <span className="text-sm font-medium">
-                    {monRang === 1 ? '1er' : `${monRang}ème`} sur {classement.length} agents — {agent?.agences?.nom}
-                  </span>
-                </div>
-              )}
             </div>
 
             {/* Équipe + Zones */}
@@ -592,15 +549,12 @@ const totalCollecte = totalSmart
                         style={{
                           backgroundColor:
                             ficheDuJour.statut_validation === 'validee' ? '#DCFCE7' :
-                            ficheDuJour.statut_validation === 'rejetee' ? '#FEE2E2' :
                             ficheDuJour.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF',
                           color:
                             ficheDuJour.statut_validation === 'validee' ? '#166534' :
-                            ficheDuJour.statut_validation === 'rejetee' ? '#991B1B' :
                             ficheDuJour.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94'
                         }}>
                         {ficheDuJour.statut_validation === 'validee' ? '✅ Validée' :
-                         ficheDuJour.statut_validation === 'rejetee' ? '❌ Rejetée' :
                          ficheDuJour.statut_validation === 'a_corriger' ? '🔄 À corriger' : '⏳ En attente'}
                       </span>
                     </div>
@@ -645,139 +599,40 @@ const totalCollecte = totalSmart
               <span className="text-lg" style={{ color: sub }}>→</span>
             </button>
 
-            {/* KPIs du jour */}
-            {ficheDuJour && (
-  <div>
-    <h2 className="text-sm font-bold mb-3" style={{ color: text }}>🎯 Performance du jour</h2>
-    <div className="grid grid-cols-3 gap-3">
-      {[
-        { label: 'SMART', value: (ficheDuJour.montant_smart ?? ficheDuJour.montant_mobilise ?? 0).toLocaleString() + ' F', objectif: 25000, raw: ficheDuJour.montant_smart ?? ficheDuJour.montant_mobilise ?? 0 },
-        { label: 'Commission', value: (ficheDuJour.commission_jour || 0).toLocaleString() + ' F', objectif: 5000, raw: ficheDuJour.commission_jour || 0 },
-        { label: 'Comptes DAT', value: ficheDuJour.comptes_ouverts_dat || ficheDuJour.comptes_ouverts || 0, objectif: 6, raw: ficheDuJour.comptes_ouverts_dat || ficheDuJour.comptes_ouverts || 0 },
-        { label: 'Adhésions', value: ficheDuJour.nb_adhesions || 0, objectif: 5, raw: ficheDuJour.nb_adhesions || 0 },
-        { label: 'Réactivations', value: ficheDuJour.reactivations?.length || 0, objectif: 3, raw: ficheDuJour.reactivations?.length || 0 },
-        { label: 'Augm. mise', value: ficheDuJour.augmentations_mise?.length || 0, objectif: 3, raw: ficheDuJour.augmentations_mise?.length || 0 },
-      ].map(k => {
-        const pct = Math.min(100, Math.round((k.raw / k.objectif) * 100))
-        const color = pct >= 100 ? '#166534' : pct >= 50 ? '#854D0E' : '#991B1B'
-        const barColor = pct >= 100 ? '#22C55E' : pct >= 50 ? '#EAB308' : '#EF4444'
-        return (
-          <div key={k.label} className="rounded-2xl p-3" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-            <div className="text-xs mb-1" style={{ color: sub }}>{k.label}</div>
-            <div className="font-bold text-base" style={{ color }}>{k.value}</div>
-            <div className="w-full h-1.5 rounded-full mt-2" style={{ backgroundColor: isDark ? '#334155' : '#f1f5f9' }}>
-              <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, backgroundColor: barColor }} />
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  </div>
-)}
+            <AgentInsights agentId={agent.id} hasAgency={!!agent.agence_id} mode="home" isDark={isDark} />
 
-            {/* Objectifs assignés */}
-            {objectifs.length > 0 && (
-              <div>
-                <h2 className="text-sm font-bold mb-3" style={{ color: text }}>🎯 Mes objectifs</h2>
-                <div className="space-y-2">
-                  {objectifs.slice(0, 2).map(obj => {
-                    const cible = obj.cible_montant_smart || 0
-                    const progression = cible > 0
-                      ? Math.min(100, Math.round((totalSmart / cible) * 100)) : 0
-                    return (
-                      <div key={obj.id} className="rounded-2xl p-4" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="font-medium text-sm" style={{ color: text }}>{obj.titre}</span>
-                          <span className="text-xs px-2 py-0.5 rounded-full"
-                            style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-                            {obj.type_periodicite}
-                          </span>
-                        </div>
-                        <div className="w-full h-2 rounded-full mb-1" style={{ backgroundColor: isDark ? '#334155' : '#f1f5f9' }}>
-                          <div className="h-2 rounded-full transition-all"
-                            style={{ width: `${progression}%`, backgroundColor: progression >= 100 ? '#22C55E' : '#2A4E94' }} />
-                        </div>
-                        <div className="flex justify-between text-xs" style={{ color: sub }}>
-                          <span>{totalSmart.toLocaleString()} F</span>
-                          <span>{progression}% — objectif {cible.toLocaleString()} F</span>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Résumé mensuel */}
-            <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-              <h2 className="text-sm font-bold mb-4" style={{ color: text }}>📊 Résumé du mois</h2>
-              <div className="grid grid-cols-2 gap-3">
-              {[
-                  { label: 'Jours actifs', value: joursActifs, icon: '📅' },
-                  { label: 'Comptes DAT', value: totalComptesDat, icon: '🏦' },
-                  { label: 'Collecté (SMART)', value: totalSmart.toLocaleString() + ' F', icon: '💵' },
-                  { label: 'Commissions', value: totalCommissions.toLocaleString() + ' F', icon: '💰' },
-                  { label: 'Adhésions', value: totalAdhesions, icon: '👥' },
-                  { label: 'Lydé Cash', value: totalLydeCash, icon: '📱' },
-                  { label: 'Réactivations', value: totalReactivations, icon: '🔄' },
-                  { label: 'Augm. mise', value: totalAugmentations, icon: '📈' },
-                ].map(item => (
-                  <div key={item.label} className="text-center p-3 rounded-xl"
-                    style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                    <div className="text-2xl mb-1">{item.icon}</div>
-                    <div className="font-bold text-lg" style={{ color: '#2A4E94' }}>{item.value}</div>
-                    <div className="text-xs mt-0.5" style={{ color: sub }}>{item.label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Classement agence */}
-            {classement.length > 1 && (
-              <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                <h2 className="text-sm font-bold mb-4" style={{ color: text }}>
-                  🏆 Classement — {agent?.agences?.nom}
-                </h2>
-                <div className="space-y-2">
-                  {classement.slice(0, 5).map((a, i) => (
-                    <div key={a.id} className="flex items-center gap-3 p-2 rounded-xl"
-                      style={{ backgroundColor: a.id === agent?.id ? (isDark ? '#1e3a5f' : '#EEF2FF') : 'transparent' }}>
-                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold"
-                        style={{
-                          backgroundColor: i === 0 ? '#FEF9C3' : i === 1 ? '#F1F5F9' : i === 2 ? '#FEF2F2' : (isDark ? '#334155' : '#f8fafc'),
-                          color: i === 0 ? '#854D0E' : i === 1 ? '#475569' : i === 2 ? '#991B1B' : sub
-                        }}>
-                        {i + 1}
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-xs font-medium" style={{ color: a.id === agent?.id ? '#2A4E94' : text }}>
-                          {a.prenom} {a.nom} {a.id === agent?.id ? '(moi)' : ''}
-                        </div>
-                        <div className="text-xs" style={{ color: sub }}>{(a.score || 0).toLocaleString()} F</div>
-                      </div>
-                      {i === 0 && <span>🥇</span>}
-                      {i === 1 && <span>🥈</span>}
-                      {i === 2 && <span>🥉</span>}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {ficheDuJour && <div className="rounded-2xl p-4 space-y-2" style={{ backgroundColor: card, color: text }}>
+              <h2 className="font-bold text-sm">Rapport du jour</h2>
+              <p className="text-xs">Une fiche non validée est exportée avec la mention brouillon.</p>
+              <AgentExportButtons target={{ type: 'fiche', ficheId: ficheDuJour.id }} />
+            </div>}
           </>
         )}
 
-        {/* ════ FICHES ════ */}
+        {/* Mes fiches */}
         {activeTab === 'fiches' && (
   <div className="space-y-4">
     <h2 className="text-sm font-bold" style={{ color: text }}>📋 Mes fiches</h2>
 
+    {fichesLoading && (
+      <div className="rounded-2xl p-4 text-sm" style={{ backgroundColor: card, color: sub, border: `1px solid ${border}` }}>
+        Chargement de l&apos;historique…
+      </div>
+    )}
+    {fichesError && (
+      <div role="alert" className="rounded-2xl p-4 flex items-center justify-between gap-3" style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+        <span className="text-sm">Impossible de charger les fiches : {fichesError}</span>
+        <button type="button" onClick={() => agent && loadFiches(agent.id)} className="text-xs font-semibold underline">Réessayer</button>
+      </div>
+    )}
+
     {/* Stats rapides */}
     <div className="grid grid-cols-4 gap-2">
       {[
-        { label: 'Total', value: fiches.length, color: '#2A4E94', bg: '#EEF2FF' },
-        { label: 'Validées', value: fiches.filter(f => f.statut_validation === 'validee').length, color: '#166534', bg: '#F0FDF4' },
-        { label: 'Rejetées', value: fiches.filter(f => f.statut_validation === 'rejetee').length, color: '#991B1B', bg: '#FEF2F2' },
-        { label: 'En attente', value: fiches.filter(f => !f.statut_validation || f.statut_validation === 'en_attente').length, color: '#854D0E', bg: '#FEF9C3' },
+        { label: 'Total', value: fichesFiltrees.length, color: '#2A4E94', bg: '#EEF2FF' },
+        { label: 'Validées', value: fichesFiltrees.filter(f => f.statut_validation === 'validee').length, color: '#166534', bg: '#F0FDF4' },
+        { label: 'À corriger', value: fichesFiltrees.filter(f => f.statut_validation === 'a_corriger').length, color: '#854D0E', bg: '#FEF9C3' },
+        { label: 'En attente', value: fichesFiltrees.filter(f => !f.statut_validation || f.statut_validation === 'en_attente').length, color: '#854D0E', bg: '#FEF9C3' },
       ].map(s => (
         <div key={s.label} className="rounded-2xl p-3 text-center" style={{ backgroundColor: s.bg }}>
           <div className="font-bold text-lg" style={{ color: s.color }}>{s.value}</div>
@@ -808,8 +663,6 @@ const totalCollecte = totalSmart
         {fichesFiltrees.map(fiche => {
           const statutColor = fiche.statut_validation === 'validee'
             ? { bg: '#DCFCE7', color: '#166534', label: '✅ Validée' }
-            : fiche.statut_validation === 'rejetee'
-            ? { bg: '#FEE2E2', color: '#991B1B', label: '❌ Rejetée' }
             : fiche.statut_validation === 'a_corriger'
             ? { bg: '#FEF9C3', color: '#854D0E', label: '🔄 À corriger' }
             : { bg: '#EEF2FF', color: '#2A4E94', label: '⏳ En attente' }
@@ -851,7 +704,7 @@ const totalCollecte = totalSmart
                   {[
                     { label: 'SMART', value: ((fiche.montant_smart ?? fiche.montant_mobilise ?? 0) / 1000).toFixed(0) + 'k' },
                     { label: 'Caisse', value: ((fiche.montant_caisse ?? fiche.montant_rapporte ?? 0) / 1000).toFixed(0) + 'k' },
-                    { label: 'Réact.', value: fiche.reactivations?.length || 0 },
+                    { label: 'Réact. effectives', value: fiche.reactivations?.filter((r: { reactif: boolean }) => r.reactif === true).length || 0 },
                     { label: 'Augm.', value: fiche.augmentations_mise?.length || 0 },
                   ].map(k => (
                     <div key={k.label} className="text-center p-1.5 rounded-lg"
@@ -866,6 +719,19 @@ const totalCollecte = totalSmart
                   {selectedFicheAgent?.id === fiche.id ? '▲ Réduire' : '▼ Voir détails'}
                 </div>
               </button>
+
+              <div className="mx-4 mb-4 flex flex-col gap-3 border-t pt-3 sm:flex-row sm:items-center sm:justify-between"
+                role="group"
+                aria-label={`Exporter la fiche du ${fiche.date}`}
+                style={{ borderColor: border, color: text }}>
+                <div>
+                  <p className="text-xs font-semibold">Rapport de cette journée</p>
+                  {fiche.statut_validation !== 'validee' && (
+                    <p className="mt-1 text-xs" style={{ color: sub }}>Export avec la mention brouillon</p>
+                  )}
+                </div>
+                <AgentExportButtons target={{ type: 'fiche', ficheId: fiche.id }} />
+              </div>
 
               {/* Détail complet */}
               {selectedFicheAgent?.id === fiche.id && (
@@ -1005,156 +871,7 @@ const totalCollecte = totalSmart
           </div>
         )}
 
-        {/* ════ PERFORMANCE ════ */}
-        {activeTab === 'performance' && (
-          <div className="space-y-4">
-            <h2 className="text-sm font-bold" style={{ color: text }}>📈 Mes performances</h2>
-
-            {/* Indicateurs mois */}
-            <div className="space-y-3">
-            {[
-                { titre: 'Taux de conformité', valeur: tauxConformite, objectif: 100, icon: '🎯', color: '#2A4E94' },
-                { titre: 'Régularité', valeur: tauxRegularite, objectif: 100, icon: '📅', color: '#166534' },
-                { titre: 'Score mensuel', valeur: scoreMensuel, objectif: 100, icon: '⭐', color: '#854D0E' },
-              ].map(ind => {
-                const atteint = ind.valeur >= ind.objectif
-                const partiel = ind.valeur >= ind.objectif * 0.5
-                const barColor = atteint ? '#22C55E' : partiel ? '#EAB308' : '#EF4444'
-                const textC = atteint ? '#166534' : partiel ? '#854D0E' : '#991B1B'
-                return (
-                  <div key={ind.titre} className="rounded-2xl p-4" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{ind.icon}</span>
-                        <span className="font-semibold text-sm" style={{ color: text }}>{ind.titre}</span>
-                      </div>
-                      <span className="font-bold text-2xl" style={{ color: textC }}>{ind.valeur}%</span>
-                    </div>
-                    <div className="w-full h-3 rounded-full" style={{ backgroundColor: isDark ? '#334155' : '#f1f5f9' }}>
-                      <div className="h-3 rounded-full transition-all"
-                        style={{ width: `${Math.min(ind.valeur, 100)}%`, backgroundColor: barColor }} />
-                    </div>
-                    <div className="flex justify-between text-xs mt-1" style={{ color: sub }}>
-                      <span>{ind.valeur}%</span>
-                      <span>Objectif : {ind.objectif}%</span>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Graphique 7 jours */}
-            <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-              <h3 className="font-semibold text-sm mb-4" style={{ color: text }}>📊 Collecte — 7 derniers jours</h3>
-              {sept7Jours.every(d => d.montant === 0) ? (
-                <div className="text-center py-6 text-sm" style={{ color: sub }}>Aucune donnée cette semaine</div>
-              ) : (
-                <div className="flex items-end gap-2 h-28">
-                  {sept7Jours.map((d, i) => {
-                    const maxVal = Math.max(...sept7Jours.map(x => x.montant), 1)
-                    const pct = Math.max(4, (d.montant / maxVal) * 100)
-                    const isToday = d.jour === new Date().toLocaleDateString('fr-FR', { weekday: 'short' })
-                    return (
-                      <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                        {d.montant > 0 && (
-                          <div className="text-xs font-medium" style={{ color: '#2A4E94' }}>
-                            {(d.montant / 1000).toFixed(0)}k
-                          </div>
-                        )}
-                        <div className="w-full rounded-t-lg"
-                          style={{ height: `${pct}%`, backgroundColor: isToday ? '#E4322C' : '#2A4E94', opacity: d.montant === 0 ? 0.2 : 1 }} />
-                        <div className="text-xs" style={{ color: sub }}>{d.jour}</div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Graphique comptes 7 jours */}
-            <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-              <h3 className="font-semibold text-sm mb-4" style={{ color: text }}>🏦 Comptes ouverts — 7 jours</h3>
-              <div className="flex items-end gap-2 h-24">
-                {sept7Jours.map((d, i) => {
-                  const maxVal = Math.max(...sept7Jours.map(x => x.comptes), 1)
-                  const pct = Math.max(4, (d.comptes / maxVal) * 100)
-                  return (
-                    <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                      {d.comptes > 0 && (
-                        <div className="text-xs font-medium" style={{ color: '#166534' }}>{d.comptes}</div>
-                      )}
-                      <div className="w-full rounded-t-lg"
-                        style={{ height: `${pct}%`, backgroundColor: '#22C55E', opacity: d.comptes === 0 ? 0.2 : 1 }} />
-                      <div className="text-xs" style={{ color: sub }}>{d.jour}</div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Radar simplifié */}
-            <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-              <h3 className="font-semibold text-sm mb-4" style={{ color: text }}>🎯 Radar performance mensuelle</h3>
-              <div className="space-y-3">
-              {[
-                  { label: 'Conformité caisse', value: tauxConformite, max: 100 },
-                  { label: 'Comptes DAT', value: joursActifs > 0 ? Math.min(100, Math.round((totalComptesDat / (joursActifs * 6)) * 100)) : 0, max: 100 },
-                  { label: 'Adhésions', value: joursActifs > 0 ? Math.min(100, Math.round((totalAdhesions / (joursActifs * 5)) * 100)) : 0, max: 100 },
-                  { label: 'Régularité', value: tauxRegularite, max: 100 },
-                ].map(r => {
-                  const color = r.value >= 80 ? '#22C55E' : r.value >= 50 ? '#EAB308' : '#EF4444'
-                  return (
-                    <div key={r.label}>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span style={{ color: text }}>{r.label}</span>
-                        <span className="font-bold" style={{ color }}>{r.value}%</span>
-                      </div>
-                      <div className="w-full h-2.5 rounded-full" style={{ backgroundColor: isDark ? '#334155' : '#f1f5f9' }}>
-                        <div className="h-2.5 rounded-full transition-all"
-                          style={{ width: `${r.value}%`, backgroundColor: color }} />
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Comparaison mois précédent */}
-            <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-              <h3 className="font-semibold text-sm mb-3" style={{ color: text }}>📅 Ce mois vs mois précédent</h3>
-              {(() => {
-                const now = new Date()
-                const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-                const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0)
-                const fichesPrev = fiches.filter(f => new Date(f.date) >= prevStart && new Date(f.date) <= prevEnd)
-                const collectePrev = fichesPrev.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
-                const diff = totalCollecte - collectePrev
-                const pct = collectePrev > 0 ? Math.round((diff / collectePrev) * 100) : 0
-                return (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="rounded-xl p-3 text-center" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                      <div className="text-xs mb-1" style={{ color: sub }}>Mois précédent</div>
-                      <div className="font-bold" style={{ color: text }}>{collectePrev.toLocaleString()} F</div>
-                    </div>
-                    <div className="rounded-xl p-3 text-center" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                      <div className="text-xs mb-1" style={{ color: sub }}>Ce mois</div>
-                      <div className="font-bold" style={{ color: text }}>{totalCollecte.toLocaleString()} F</div>
-                    </div>
-                    <div className="col-span-2 rounded-xl p-3 text-center"
-                      style={{ backgroundColor: diff >= 0 ? '#F0FDF4' : '#FEF2F2' }}>
-                      <div className="font-bold text-lg" style={{ color: diff >= 0 ? '#166534' : '#991B1B' }}>
-                        {diff >= 0 ? '↑' : '↓'} {Math.abs(pct)}%
-                      </div>
-                      <div className="text-xs" style={{ color: diff >= 0 ? '#166534' : '#991B1B' }}>
-                        {diff >= 0 ? 'Progression' : 'Régression'} vs mois dernier
-                      </div>
-                    </div>
-                  </div>
-                )
-              })()}
-            </div>
-          </div>
-        )}
+        {activeTab === 'performance' && <AgentInsights agentId={agent.id} hasAgency={!!agent.agence_id} mode="stats" isDark={isDark} />}
 
         {/* ════ MESSAGES ════ */}
         {activeTab === 'messages' && (
@@ -1178,7 +895,7 @@ const totalCollecte = totalSmart
                   const nonLus = messages.filter(m => m.expediteur_id === contact.id && m.destinataire_id === agent?.id && !m.lu).length
                   return (
                     <button key={contact.id} type="button"
-                      onClick={() => setSelectedContact(contact)}
+                      onClick={() => ouvrirConversation(contact)}
                       className="w-full rounded-2xl p-4 flex items-center gap-3 text-left"
                       style={{ backgroundColor: card, border: `1px solid ${border}` }}>
                       <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white shrink-0"
@@ -1412,7 +1129,7 @@ const totalCollecte = totalSmart
               <h3 className="font-semibold text-sm mb-4" style={{ color: '#2A4E94' }}>🔔 Notifications</h3>
               <div className="space-y-3">
                 {[
-                  { key: 'notif_validation', label: 'Validation de fiche', desc: 'Quand votre fiche est validée ou rejetée' },
+                  { key: 'notif_validation', label: 'Validation de fiche', desc: 'Quand votre fiche est validée ou renvoyée en correction' },
                   { key: 'notif_rappel', label: 'Rappels', desc: 'Rappel si fiche non soumise' },
                   { key: 'notif_objectif', label: 'Objectifs', desc: 'Quand un objectif est atteint' },
                   { key: 'notif_message', label: 'Messages', desc: 'Nouveaux messages du chef' },

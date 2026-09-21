@@ -3,20 +3,28 @@ import { NextRequest, NextResponse } from 'next/server'
 
 export async function POST(req: NextRequest) {
   try {
-    const { userId, newPassword, callerToken } = await req.json()
+    const body = await req.json()
+    const userId = typeof body.userId === 'string' ? body.userId.trim() : ''
+    const newPassword = typeof body.newPassword === 'string' ? body.newPassword : ''
+    const callerToken = typeof body.callerToken === 'string' ? body.callerToken : ''
 
-    if (!userId || !newPassword) {
+    if (!userId || !newPassword || !callerToken) {
       return NextResponse.json({ ok: false, error: 'Paramètres manquants.' }, { status: 400 })
     }
     if (newPassword.length < 8) {
       return NextResponse.json({ ok: false, error: 'Le mot de passe doit faire au moins 8 caractères.' }, { status: 400 })
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    if (!supabaseUrl || !serviceKey) {
+      return NextResponse.json({ ok: false, error: 'Configuration serveur incomplète.' }, { status: 500 })
+    }
 
     // Client admin (service role)
-    const admin = createClient(supabaseUrl, serviceKey)
+    const admin = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    })
 
     // 1. Vérifier que l'appelant est authentifié
     const { data: caller, error: callerErr } = await admin.auth.getUser(callerToken)
@@ -25,14 +33,19 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Vérifier que l'appelant est admin
-    const { data: callerAgent } = await admin
+    const { data: callerAgent, error: callerAgentError } = await admin
       .from('agents')
-      .select('role')
+      .select('role, statut, actif')
       .eq('user_id', caller.user.id)
       .single()
 
-    if (callerAgent?.role !== 'admin') {
-      return NextResponse.json({ ok: false, error: 'Accès réservé aux administrateurs.' }, { status: 403 })
+    if (
+      callerAgentError ||
+      callerAgent?.role !== 'admin' ||
+      callerAgent.statut !== 'actif' ||
+      callerAgent.actif !== true
+    ) {
+      return NextResponse.json({ ok: false, error: 'Accès refusé (admin actif requis).' }, { status: 403 })
     }
 
     // 3. Réinitialiser le mot de passe de l'utilisateur cible
@@ -45,7 +58,8 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ ok: true })
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e.message || 'Erreur serveur.' }, { status: 500 })
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Erreur serveur.'
+    return NextResponse.json({ ok: false, error: message }, { status: 500 })
   }
 }

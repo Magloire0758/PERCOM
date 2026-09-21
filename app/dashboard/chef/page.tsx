@@ -3,10 +3,17 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
-import FicheDetail from '@/components/FicheDetail'
+import AgentInsights from '@/components/AgentInsights'
+import AgentExportButtons from '@/components/AgentExportButtons'
+import TeamWorkspace from '@/components/TeamWorkspace'
+import { useTeamRpc } from '@/lib/use-team-rpc'
+import type { TeamQueue } from '@/lib/team-reporting'
+import { Home, Files, Users, ChartNoAxesCombined, Menu, Bell, Plus, ArrowRight } from 'lucide-react'
 import FicheDetailModal from '@/components/FicheDetailModal'
 import RegularisationModal from '@/components/RegularisationModal'   // ← AJOUTER
 import EcartHistorique from '@/components/EcartHistorique'   
+import { getEcart, getRestant } from '@/lib/ecarts'
+import { fetchAllRows } from '@/lib/supabase-pagination'
 
 type ActiveTab = 'accueil' | 'fiches' | 'equipe' | 'manquants' | 'performance' | 'messages' | 'profil'
 
@@ -20,24 +27,16 @@ export default function DashboardChef() {
   // Data agent (propres données)
   const [ficheDuJour, setFicheDuJour] = useState<any>(null)
   const [fiches, setFiches] = useState<any[]>([])
-  const [objectifs, setObjectifs] = useState<any[]>([])
+  const [fichesLoading, setFichesLoading] = useState(false)
+  const [fichesError, setFichesError] = useState('')
   const [notifications, setNotifications] = useState<any[]>([])
   const [messages, setMessages] = useState<any[]>([])
   const [contacts, setContacts] = useState<any[]>([])
-  const [classement, setClassement] = useState<any[]>([])
-  const [mesZones, setMesZones] = useState<any[]>([])
 
   // Équipe (données chef)
   const [equipeInfo, setEquipeInfo] = useState<any>(null)
-  const [equipeMembers, setEquipeMembers] = useState<any[]>([])
-  const [selectedMember, setSelectedMember] = useState<any>(null)
-  const [memberFiches, setMemberFiches] = useState<any[]>([])
-  const [memberLoadingFiches, setMemberLoadingFiches] = useState(false)
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [dateAnterieure, setDateAnterieure] = useState('')
-  // Compteurs fiches en attente par membre
-  const [membersPending, setMembersPending] = useState<Record<string, number>>({})
-
   // Modal détail fiche
   const [detailFiche, setDetailFiche] = useState<any>(null)
   const [detailCanValidate, setDetailCanValidate] = useState(false)
@@ -45,10 +44,12 @@ export default function DashboardChef() {
   const [regulFiche, setRegulFiche] = useState<any>(null)
   const [ecartsEquipe, setEcartsEquipe] = useState<any[]>([])
   const [selectedEcart, setSelectedEcart] = useState<any>(null)
-  const [equipeStats, setEquipeStats] = useState({
-    totalComptes: 0, totalCollecte: 0, totalCommissions: 0,
-    totalManquants: 0, totalSurplus: 0, nbEcarts: 0, fichesNonValidees: 0
-  })
+  const [equipeError, setEquipeError] = useState('')
+  const [statsScope, setStatsScope] = useState<'self' | 'team'>('self')
+  const [showMore, setShowMore] = useState(false)
+  const [validationBusy, setValidationBusy] = useState(false)
+  const validationLock = useRef(false)
+  const pending = useTeamRpc<TeamQueue>('equipe_file_traitement', { p_equipe_id: agent?.equipe_id ?? null, p_taille: 1 }, !!agent?.equipe_id)
 
   // Validation fiches membres
   const [showValidationModal, setShowValidationModal] = useState(false)
@@ -107,21 +108,23 @@ export default function DashboardChef() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications' },
         (p) => { if (p.new.agent_id === agent.id) setNotifications(prev => [p.new, ...prev]) })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' },
-        (p) => { if (p.new.destinataire_id === agent.id) loadMessages(agent.id) })
+        async (p) => {
+          if (p.new.destinataire_id !== agent.id) return
+          if (selectedContact?.id === p.new.expediteur_id) {
+            await supabase.rpc('marquer_message_lu', { p_message_id: p.new.id })
+          }
+          loadMessages(agent.id)
+        })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'fiches_journalieres' },
         (p) => {
           if (p.new.agent_id === agent.id) {
             setFiches(prev => prev.map(f => f.id === p.new.id ? { ...f, ...p.new } : f))
             if (ficheDuJour?.id === p.new.id) setFicheDuJour((prev: any) => ({ ...prev, ...p.new }))
           }
-          // Mettre à jour les fiches du membre sélectionné
-          if (selectedMember && p.new.agent_id === selectedMember.id) {
-            setMemberFiches(prev => prev.map(f => f.id === p.new.id ? { ...f, ...p.new } : f))
-          }
         })
       .subscribe()
     return () => { supabase.removeChannel(channel) }
-  }, [agent, selectedMember])
+  }, [agent, selectedContact])
 
   async function loadAll() {
     const { data: { user } } = await supabase.auth.getUser()
@@ -130,8 +133,11 @@ export default function DashboardChef() {
       .from('agents')
       .select('*, agences(nom), equipes!agents_equipe_id_fkey(id, nom, chef_id)')
       .eq('user_id', user.id).single()
-    if (!a) { router.push('/login'); return }
-    if (a.role !== 'chef') { router.push('/dashboard/agent'); return }
+    if (!a || a.role !== 'chef' || a.statut !== 'actif' || a.actif !== true) {
+      await supabase.auth.signOut()
+      router.push('/login')
+      return
+    }
     setAgent(a)
     setProfilForm({ nom: a.nom || '', prenom: a.prenom || '', telephone: a.telephone || '' })
     setTheme(a.theme || 'light')
@@ -143,32 +149,31 @@ export default function DashboardChef() {
     })
     await Promise.all([
       loadFiches(a.id),
-      loadObjectifs(a),
       loadNotifications(a.id),
       loadMessages(a.id),
-      loadClassement(a),
-      loadMesZones(a.id),
       loadEquipe(a),
     ])
     setLoading(false)
   }
 
   async function loadFiches(agentId: string) {
-    const { data: fiche } = await supabase.from('fiches_journalieres')
-      .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
-      .eq('agent_id', agentId).eq('date', today).maybeSingle()
-    setFicheDuJour(fiche)
-    const { data: all } = await supabase.from('fiches_journalieres')
-      .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
-      .eq('agent_id', agentId).order('date', { ascending: false })
-    setFiches(all || [])
-  }
+    setFichesLoading(true)
+    setFichesError('')
+    const [ficheResult, historiqueResult] = await Promise.all([
+      supabase.from('fiches_journalieres')
+        .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
+        .eq('agent_id', agentId).eq('date', today).maybeSingle(),
+      fetchAllRows((from, to) => supabase.from('fiches_journalieres')
+        .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
+        .eq('agent_id', agentId).order('date', { ascending: false }).order('id', { ascending: false }).range(from, to)),
+    ])
 
-  async function loadObjectifs(a: any) {
-    const { data } = await supabase.from('objectifs').select('*')
-      .or(`agent_id.eq.${a.id},equipe_id.eq.${a.equipe_id || 'null'},agence_id.eq.${a.agence_id || 'null'},type_cible.eq.global`)
-      .eq('statut_objectif', 'actif')
-    setObjectifs(data || [])
+    if (ficheResult.error || historiqueResult.error) {
+      setFichesError(ficheResult.error?.message || historiqueResult.error?.message || 'Lecture des fiches impossible.')
+    }
+    if (!ficheResult.error) setFicheDuJour(ficheResult.data)
+    if (!historiqueResult.error) setFiches(historiqueResult.data || [])
+    setFichesLoading(false)
   }
 
   async function loadNotifications(agentId: string) {
@@ -195,157 +200,88 @@ export default function DashboardChef() {
     }
   }
 
-  async function loadMesZones(agentId: string) {
-    const { data } = await supabase.from('agent_zones')
-      .select('zone_id, zones(id, numero, nom)').eq('agent_id', agentId)
-    setMesZones(data || [])
-  }
-
-  async function loadClassement(a: any) {
-    if (!a.agence_id) return
-    const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-    const { data: agentsAgence } = await supabase.from('agents')
-      .select('id, nom, prenom').eq('agence_id', a.agence_id).eq('statut', 'actif').eq('role', 'agent')
-    if (!agentsAgence?.length) return
-    const { data: fichesMois } = await supabase.from('fiches_journalieres')
-      .select('agent_id, montant_smart, montant_mobilise').gte('date', moisDebut)
-      .in('agent_id', agentsAgence.map(ag => ag.id))
-    const scores: Record<string, number> = {}
-    ;(fichesMois || []).forEach(f => { scores[f.agent_id] = (scores[f.agent_id] || 0) + (f.montant_smart ?? f.montant_mobilise ?? 0) })
-    setClassement(agentsAgence.map(ag => ({ ...ag, score: scores[ag.id] || 0 })).sort((a, b) => b.score - a.score))
-  }
-
   async function loadEquipe(a: any) {
     if (!a.equipe_id) return
-    // Info équipe
-    const { data: eq } = await supabase.from('equipes')
-      .select('*, agences(nom)').eq('id', a.equipe_id).single()
-    setEquipeInfo(eq)
-
-    // Membres (sans le chef lui-même)
-    const { data: members } = await supabase.from('agents')
-      .select('*, agences(nom)').eq('equipe_id', a.equipe_id).neq('id', a.id)
-    setEquipeMembers(members || [])
-    // Compteur fiches en attente par membre
-    const pending: Record<string, number> = {}
-    if ((members || []).length > 0) {
-      const { data: fichesAttente } = await supabase.from('fiches_journalieres')
-        .select('agent_id, statut_validation')
-        .in('agent_id', (members || []).map(m => m.id))
-      ;(fichesAttente || []).forEach(f => {
-        if (!f.statut_validation || f.statut_validation === 'en_attente' || f.statut_validation === 'a_corriger') {
-          pending[f.agent_id] = (pending[f.agent_id] || 0) + 1
-        }
-      })
-    }
-    setMembersPending(pending)
-
-// Stats équipe ce mois
-const moisDebut = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-const allMemberIds = [...(members || []).map(m => m.id), a.id]
-if (allMemberIds.length > 0) {
-  const { data: fichesMois } = await supabase.from('fiches_journalieres')
-    .select('*').gte('date', moisDebut).in('agent_id', allMemberIds)
-  const totalComptes = (fichesMois || []).reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0)
-  const totalCollecte = (fichesMois || []).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
-  const totalCommissions = (fichesMois || []).reduce((s, f) => s + (f.commission_jour || 0), 0)
-
-  // Écarts de l'équipe (pour régularisation)
-  const { data: ecartsData } = await supabase.from('fiches_journalieres')
-  .select('*, agents!fiches_journalieres_agent_id_fkey(nom, prenom, telephone, agences(nom))')
-  .in('agent_id', allMemberIds)
-  .order('date', { ascending: false })
-setEcartsEquipe((ecartsData || []).filter(f => f && getEcart(f) !== 0))
-
-  // Écarts non réglés (manquants + surplus)
-  const { data: ecarts } = await supabase.from('fiches_journalieres')
-  .select('montant_smart, montant_caisse, montant_mobilise, montant_rapporte, montant_regularise')
-  .eq('manquant_regle', false).in('agent_id', allMemberIds)
-let totalManquants = 0, totalSurplus = 0, nbEcarts = 0
-;(ecarts || []).forEach(f => {
-  const e = (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
-  const restant = Math.abs(e) - (f.montant_regularise || 0)
-  if (restant <= 0) return
-  if (e > 0) { totalManquants += restant; nbEcarts++ }
-  else if (e < 0) { totalSurplus += restant; nbEcarts++ }
-})
-
-  const { count: fichesNonValidees } = await supabase.from('fiches_journalieres')
-    .select('*', { count: 'exact', head: true }).eq('valide_chef', false).in('agent_id', allMemberIds)
-
-  setEquipeStats({
-    totalComptes, totalCollecte, totalCommissions,
-    totalManquants, totalSurplus, nbEcarts,
-    fichesNonValidees: fichesNonValidees || 0
-  })
-}
-  }
-
-  async function selectMember(member: any) {
-    setSelectedMember(member)
-    setMemberLoadingFiches(true)
-    const { data } = await supabase.from('fiches_journalieres')
-      .select('*, reactivations(*), augmentations_mise(*), assurances_details(*)')
-      .eq('agent_id', member.id)
-      .order('date', { ascending: false }).limit(15)
-    setMemberFiches(data || [])
-    setMemberLoadingFiches(false)
+    setEquipeInfo(a.equipes)
+    setEquipeError('')
+    const members = await fetchAllRows((from, to) => supabase.from('agents').select('id')
+      .eq('equipe_id', a.equipe_id).in('role', ['agent', 'chef']).order('id').range(from, to))
+    if (members.error) { setEcartsEquipe([]); setEquipeError(members.error.message); return }
+    const ids = (members.data || []).map(m => m.id)
+    if (!ids.length) { setEcartsEquipe([]); return }
+    const result = await fetchAllRows((from, to) => supabase.from('fiches_journalieres')
+      .select('*, agents!fiches_journalieres_agent_id_fkey(nom, prenom, telephone, agences(nom))')
+      .in('agent_id', ids).order('date', { ascending: false }).order('id').range(from, to))
+    if (result.error) { setEcartsEquipe([]); setEquipeError(result.error.message); return }
+    setEcartsEquipe((result.data || []).filter(f => getEcart(f) !== 0))
   }
 
   async function validerFicheChef(ficheId: string, statut: string, commentaire?: string) {
-    await supabase.from('fiches_journalieres').update({
-      valide_chef: statut === 'validee',
-      statut_validation: statut,
-      commentaire_chef: commentaire || null,
-      valide_par: agent?.id || null,
-    }).eq('id', ficheId)
-
-    // Notification à l'agent
-    const fiche = memberFiches.find(f => f.id === ficheId) || fiches.find(f => f.id === ficheId)
-    if (fiche) {
-      const titres: Record<string, string> = {
-        validee: '✅ Fiche validée', rejetee: '❌ Fiche rejetée', a_corriger: '🔄 Fiche à corriger'
-      }
-      const msgs: Record<string, string> = {
-        validee: `Votre fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')} a été validée.`,
-        rejetee: `Votre fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')} a été rejetée.${commentaire ? ` Motif: ${commentaire}` : ''}`,
-        a_corriger: `Votre fiche du ${new Date(fiche.date).toLocaleDateString('fr-FR')} nécessite des corrections.${commentaire ? ` Note: ${commentaire}` : ''}`,
-      }
-      await supabase.from('notifications').insert({
-        agent_id: fiche.agent_id,
-        type: statut === 'validee' ? 'validation' : statut === 'rejetee' ? 'rejet' : 'correction',
-        titre: titres[statut], message: msgs[statut],
-      })
+    const action = statut === 'validee' ? 'valider' : 'demander_correction'
+    const commentaireNettoye = commentaire?.trim() || null
+    if (action === 'demander_correction' && !commentaireNettoye) {
+      alert('Indiquez ce qui doit être corrigé.')
+      return false
     }
 
-    setMemberFiches(prev => prev.map(f => f.id === ficheId
-      ? { ...f, valide_chef: statut === 'validee', statut_validation: statut, commentaire_chef: commentaire || null } : f))
+    const { data, error: validationError } = await supabase.rpc('traiter_validation_fiche', {
+      p_fiche_id: ficheId,
+      p_action: action,
+      p_commentaire: commentaireNettoye,
+    })
 
+    if (validationError) {
+      alert(`Validation impossible : ${validationError.message}`)
+      return false
+    }
+
+    if (!data?.ok) {
+      alert(data?.erreur || data?.message || 'La décision n’a pas pu être enregistrée.')
+      return false
+    }
+
+    const nouveauStatut = data.statut || (action === 'valider' ? 'validee' : 'a_corriger')
     // Mettre à jour aussi ses propres fiches
     setFiches(prev => prev.map(f => f.id === ficheId
-      ? { ...f, valide_chef: statut === 'validee', statut_validation: statut, commentaire_chef: commentaire || null } : f))
+      ? { ...f, valide_chef: nouveauStatut === 'validee', statut_validation: nouveauStatut, commentaire_chef: commentaireNettoye } : f))
     if (ficheDuJour?.id === ficheId) {
-      setFicheDuJour((prev: any) => ({ ...prev, valide_chef: statut === 'validee', statut_validation: statut, commentaire_chef: commentaire || null }))
+      setFicheDuJour((prev: any) => ({ ...prev, valide_chef: nouveauStatut === 'validee', statut_validation: nouveauStatut, commentaire_chef: commentaireNettoye }))
     }
 
-    // Rafraîchir le compteur du membre
-    if (fiche) {
-      setMembersPending(prev => {
-        const updated = { ...prev }
-        if (statut === 'validee' || statut === 'rejetee') {
-          updated[fiche.agent_id] = Math.max(0, (updated[fiche.agent_id] || 0) - 1)
-        }
-        return updated
-      })
-    }
-    // Recharger les stats équipe
-    if (agent) loadEquipe(agent)
+    void pending.refresh()
+    if (agent) void loadEquipe(agent)
+    return true
   }
 
   async function marquerNotifsLues() {
     if (!agent) return
-    await supabase.from('notifications').update({ lu: true }).eq('agent_id', agent.id).eq('lu', false)
-    setNotifications(prev => prev.map(n => ({ ...n, lu: true })))
+    const nonLues = notifications.filter(n => !n.lu)
+    if (nonLues.length === 0) return
+
+    const resultats = await Promise.all(nonLues.map(async notification => {
+      const { data, error } = await supabase.rpc('marquer_notification_lue', { p_notif_id: notification.id })
+      return !error && data?.ok ? notification.id : null
+    }))
+    const idsLus = new Set(resultats.filter((id): id is string => id !== null))
+    setNotifications(prev => prev.map(n => idsLus.has(n.id) ? { ...n, lu: true } : n))
+    if (idsLus.size !== nonLues.length) console.error('Certaines notifications n’ont pas pu être marquées comme lues.')
+  }
+
+  async function ouvrirConversation(contact: (typeof contacts)[number]) {
+    setSelectedContact(contact)
+    if (!agent) return
+    const aMarquer = messages.filter(message =>
+      message.expediteur_id === contact.id && message.destinataire_id === agent.id && !message.lu
+    )
+    if (aMarquer.length === 0) return
+
+    const resultats = await Promise.all(aMarquer.map(async message => {
+      const { data, error } = await supabase.rpc('marquer_message_lu', { p_message_id: message.id })
+      return !error && data?.ok ? message.id : null
+    }))
+    const idsLus = new Set(resultats.filter((id): id is string => id !== null))
+    setMessages(prev => prev.map(message => idsLus.has(message.id) ? { ...message, lu: true } : message))
+    if (idsLus.size !== aMarquer.length) console.error('Certains messages n’ont pas pu être marqués comme lus.')
   }
 
   async function envoyerMessage() {
@@ -394,52 +330,13 @@ let totalManquants = 0, totalSurplus = 0, nbEcarts = 0
     router.push('/login')
   }
 
-// ── Helper écart ──
-const getEcart = (f: any) => {
-  if (!f) return 0
-  return (f.montant_smart ?? f.montant_mobilise ?? 0) - (f.montant_caisse ?? f.montant_rapporte ?? 0)
-}
-
-const getRestant = (f: any) => {
-  if (!f) return 0
-  return Math.abs(getEcart(f)) - (f.montant_regularise || 0)
-}
-
-// ── Calculs agent ──
-const fichesMois = fiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1))
-const totalComptesDat = fichesMois.reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0)
-const totalSmart = fichesMois.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
-const totalCaisse = fichesMois.reduce((s, f) => s + (f.montant_caisse ?? f.montant_rapporte ?? 0), 0)
-const totalCommissions = fichesMois.reduce((s, f) => s + (f.commission_jour || 0), 0)
-const totalAdhesions = fichesMois.reduce((s, f) => s + (f.nb_adhesions || 0), 0)
-const totalLydeCash = fichesMois.reduce((s, f) => s + (f.nb_abonnements_lyde_cash || 0), 0)
-const totalReactivations = fichesMois.reduce((s, f) => s + (f.reactivations?.length || 0), 0)
-const totalAugmentations = fichesMois.reduce((s, f) => s + (f.augmentations_mise?.length || 0), 0)
-const joursActifs = fichesMois.length
-const joursSansEcart = fichesMois.filter(f => getEcart(f) === 0).length
-const tauxConformite = joursActifs > 0 ? Math.round((joursSansEcart / joursActifs) * 100) : 0
-const tauxRegularite = Math.min(100, Math.round((joursActifs / new Date().getDate()) * 100))
-const scoreMensuel = joursActifs > 0 ? Math.min(100, Math.round((totalComptesDat / (joursActifs * 6)) * 100)) : 0
-const totalCollecte = totalSmart
-
-  const streak = (() => {
-    let count = 0; const now = new Date()
-    for (let i = 0; i < 365; i++) {
-      const d = new Date(now); d.setDate(now.getDate() - i)
-      if (fiches.find(f => f.date === d.toISOString().split('T')[0])) count++
-      else if (i > 0) break
-    }
-    return count
-  })()
-
   const ecartsListe = fiches.filter(f => getEcart(f) !== 0)
-  const ecartsNonRegles = ecartsListe.filter(f => !f.manquant_regle)
+  const ecartsNonRegles = ecartsListe.filter(f => getRestant(f) > 0)
   const manquantsNonRegles = ecartsNonRegles.filter(f => getEcart(f) > 0)
   const surplusNonRegles = ecartsNonRegles.filter(f => getEcart(f) < 0)
-  const totalManquants = manquantsNonRegles.reduce((s, f) => s + getEcart(f), 0)
-  const totalSurplus = Math.abs(surplusNonRegles.reduce((s, f) => s + getEcart(f), 0))
+  const totalManquants = manquantsNonRegles.reduce((s, f) => s + getRestant(f), 0)
+  const totalSurplus = surplusNonRegles.reduce((s, f) => s + getRestant(f), 0)
 
-  const monRang = classement.findIndex(a => a.id === agent?.id) + 1
   const notifNonLues = notifications.filter(n => !n.lu).length
   const messagesNonLus = messages.filter(m => m.destinataire_id === agent?.id && !m.lu).length
 
@@ -450,13 +347,6 @@ const totalCollecte = totalSmart
     else { f = f.filter(x => new Date(x.date).getFullYear() === now.getFullYear()) }
     return f
   })()
-
-  const sept7Jours = Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(); d.setDate(d.getDate() - (6 - i))
-    const dateStr = d.toISOString().split('T')[0]
-    const fiche = fiches.find(f => f.date === dateStr)
-    return { jour: d.toLocaleDateString('fr-FR', { weekday: 'short' }), montant: (fiche?.montant_smart ?? fiche?.montant_mobilise ?? 0), comptes: (fiche?.comptes_ouverts_dat ?? fiche?.comptes_ouverts ?? 0) }
-  })
 
   const messagesConv = selectedContact ? messages.filter(m =>
     (m.expediteur_id === agent?.id && m.destinataire_id === selectedContact.id) ||
@@ -485,7 +375,7 @@ const totalCollecte = totalSmart
 
       {/* ── HEADER ── */}
       <div style={{ backgroundColor: '#2A4E94' }}>
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-sm"
               style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: 'white' }}>
@@ -515,9 +405,9 @@ const totalCollecte = totalSmart
 
           <div className="flex items-center gap-2">
             <button type="button"
-              onClick={() => { setShowNotifPanel(!showNotifPanel); if (notifNonLues > 0) marquerNotifsLues() }}
+              aria-label="Notifications" onClick={() => { setShowNotifPanel(!showNotifPanel); if (notifNonLues > 0) marquerNotifsLues() }}
               className="relative p-2 rounded-lg" style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}>
-              <span className="text-lg">🔔</span>
+              <Bell size={20} className="text-white" />
               {notifNonLues > 0 && (
                 <span className="absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold text-white"
                   style={{ backgroundColor: '#E4322C' }}>
@@ -525,11 +415,11 @@ const totalCollecte = totalSmart
                 </span>
               )}
             </button>
-            {equipeStats.fichesNonValidees > 0 && (
+            {(pending.data?.compteurs.en_attente ?? 0) > 0 && (
               <button type="button" onClick={() => setActiveTab('equipe')}
                 className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium"
                 style={{ backgroundColor: '#EAB308', color: 'white' }}>
-                📋 {equipeStats.fichesNonValidees} à valider
+                📋 {(pending.data?.compteurs.en_attente ?? 0)} à valider
               </button>
             )}
           </div>
@@ -537,7 +427,7 @@ const totalCollecte = totalSmart
 
         {/* Notifications Panel */}
         {showNotifPanel && (
-          <div className="max-w-2xl mx-auto px-4 pb-2">
+          <div className="max-w-6xl mx-auto px-4 pb-2">
             <div className="rounded-2xl overflow-hidden shadow-2xl" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
               <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: border }}>
                 <span className="font-semibold text-sm" style={{ color: text }}>🔔 Notifications</span>
@@ -563,277 +453,47 @@ const totalCollecte = totalSmart
         )}
       </div>
 
+      {activeTab === 'manquants' && equipeError && <div role="alert" className="max-w-6xl mx-auto mt-4 rounded-xl bg-red-50 p-4 text-red-800">Écarts équipe indisponibles : {equipeError}<button className="ml-3 underline" onClick={() => void loadEquipe(agent)}>Réessayer</button></div>}
       {/* ── CONTENU ── */}
-      <div className="max-w-2xl mx-auto p-4 pb-24 space-y-4">
+      <div className="max-w-6xl mx-auto p-4 pb-24 space-y-4">
 
         {/* ════ ACCUEIL ════ */}
-        {activeTab === 'accueil' && (
-          <>
-            {/* Hero */}
-            <div className="rounded-2xl p-5"
-              style={{ background: 'linear-gradient(135deg, #2A4E94, #1e3a6e)', color: 'white' }}>
-              <div className="flex items-start justify-between mb-4">
-                <div>
-                  <p className="text-sm opacity-75">
-                    {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
-                  </p>
-                  <h1 className="text-xl font-bold mt-0.5">Bonjour, {agent?.prenom} 👋</h1>
-                  {equipeInfo && (
-                    <p className="text-xs mt-1 opacity-75">Chef — {equipeInfo.nom}</p>
-                  )}
-                </div>
-                {streak > 0 && (
-                  <div className="flex items-center gap-1 px-3 py-1.5 rounded-full"
-                    style={{ backgroundColor: 'rgba(255,255,255,0.2)' }}>
-                    <span className="text-lg">🔥</span>
-                    <span className="font-bold text-sm">{streak}j</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-3 gap-3 mb-3">
-              {[
-                  { label: 'Conformité', value: `${tauxConformite}%`, icon: '🎯' },
-                  { label: 'Régularité', value: `${tauxRegularite}%`, icon: '📅' },
-                  { label: 'Mon score', value: `${scoreMensuel}%`, icon: '⭐' },
-                ].map(s => (
-                  <div key={s.label} className="text-center p-3 rounded-xl"
-                    style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}>
-                    <div className="text-xl mb-1">{s.icon}</div>
-                    <div className="font-bold text-lg">{s.value}</div>
-                    <div className="text-xs opacity-75">{s.label}</div>
-                  </div>
-                ))}
-              </div>
-
-              {monRang > 0 && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl"
-                  style={{ backgroundColor: 'rgba(255,255,255,0.15)' }}>
-                  <span className="text-lg">🏆</span>
-                  <span className="text-sm font-medium">
-                    {monRang === 1 ? '1er' : `${monRang}ème`} — {agent?.agences?.nom}
-                  </span>
-                </div>
-              )}
+        {activeTab === 'accueil' && <>
+          <section className="rounded-3xl bg-blue-950 p-6 sm:p-8 text-white shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-widest text-blue-300">Votre espace de collecte</p>
+            <h1 className="mt-3 text-2xl sm:text-3xl font-bold tracking-tight">Bonjour {agent?.prenom}</h1>
+            <p className="mt-2 text-sm text-blue-200">Pilotez votre journée et accompagnez votre équipe.</p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button type="button" onClick={() => ficheDuJour ? setActiveTab('fiches') : router.push('/dashboard/agent/fiche')} className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-semibold text-blue-950"><Plus size={18} />{ficheDuJour ? 'Voir ma fiche du jour' : 'Saisir ma fiche du jour'}</button>
+              <button type="button" onClick={() => setShowDatePicker(true)} className="rounded-xl border border-blue-500 px-4 py-3 text-sm font-semibold">Saisir une date antérieure</button>
             </div>
-
-            {/* Stats équipe rapide */}
-            {equipeInfo && (
-              <div className="rounded-2xl p-4"
-                style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-bold" style={{ color: text }}>
-                    👥 {equipeInfo.nom} — Ce mois
-                  </h2>
-                  <button type="button" onClick={() => setActiveTab('equipe')}
-                    className="text-xs px-2 py-1 rounded-lg font-medium"
-                    style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-                    Voir →
-                  </button>
-                </div>
-                <div className="grid grid-cols-4 gap-2">
-                  {[
-                    { label: 'Membres', value: equipeMembers.length + 1, icon: '👤', color: '#2A4E94' },
-                    { label: 'Comptes DAT', value: equipeStats.totalComptes, icon: '🏦', color: '#166534' },
-                    { label: 'SMART', value: (equipeStats.totalCollecte / 1000).toFixed(0) + 'k F', icon: '💰', color: '#854D0E' },
-                    { label: 'À valider', value: equipeStats.fichesNonValidees, icon: '📋', color: equipeStats.fichesNonValidees > 0 ? '#991B1B' : '#166534' },
-                  ].map(s => (
-                    <div key={s.label} className="text-center p-2 rounded-xl"
-                      style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                      <div className="text-lg mb-0.5">{s.icon}</div>
-                      <div className="font-bold text-sm" style={{ color: s.color }}>{s.value}</div>
-                      <div className="text-xs" style={{ color: sub }}>{s.label}</div>
-                    </div>
-                  ))}
-                </div>
-                {equipeStats.fichesNonValidees > 0 && (
-                  <button type="button" onClick={() => setActiveTab('equipe')}
-                    className="mt-3 w-full py-2 rounded-xl text-xs font-semibold"
-                    style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
-                    ⚠️ {equipeStats.fichesNonValidees} fiche(s) en attente de validation
-                  </button>
-                )}
-              </div>
-            )}
-
-            {/* Équipe + Zones */}
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-2xl p-4 flex items-center gap-3"
-                style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
-                  style={{ backgroundColor: '#FEF9C3' }}>👨‍💼</div>
-                <div>
-                  <div className="text-xs" style={{ color: sub }}>Chef de</div>
-                  <div className="font-bold text-sm mt-0.5" style={{ color: '#854D0E' }}>
-                    {equipeInfo?.nom || '—'}
-                  </div>
-                  <span className="text-xs px-2 py-0.5 rounded-full font-semibold mt-1 inline-block"
-                    style={{ backgroundColor: '#FEF9C3', color: '#854D0E' }}>
-                    {equipeMembers.length} membre(s)
-                  </span>
-                </div>
-              </div>
-              <div className="rounded-2xl p-4 flex items-start gap-3"
-                style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
-                  style={{ backgroundColor: '#F0FDF4' }}>🗺️</div>
-                <div className="flex-1">
-                  <div className="text-xs mb-1" style={{ color: sub }}>Mes zones</div>
-                  {mesZones.length === 0 ? (
-                    <div className="text-xs italic" style={{ color: sub }}>Aucune zone</div>
-                  ) : (
-                    <div className="flex flex-wrap gap-1">
-                      {mesZones.map(az => (
-                        <span key={az.zone_id} className="text-xs px-2 py-0.5 rounded-full font-semibold"
-                          style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
-                          Z{az.zones?.numero}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-{/* Alerte écarts */}
-{ecartsNonRegles.length > 0 && (
-              <button type="button" onClick={() => setActiveTab('manquants')}
-                className="w-full rounded-2xl p-4 flex items-center justify-between text-left"
-                style={{
-                  backgroundColor: manquantsNonRegles.length > 0 ? '#FEF2F2' : '#EEF2FF',
-                  border: `1px solid ${manquantsNonRegles.length > 0 ? '#FECACA' : '#C7D2FE'}`
-                }}>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
-                    style={{ backgroundColor: manquantsNonRegles.length > 0 ? '#FEE2E2' : '#E0E7FF' }}>
-                    {manquantsNonRegles.length > 0 ? '⚠️' : '🔵'}
-                  </div>
-                  <div>
-                    <div className="font-semibold text-sm"
-                      style={{ color: manquantsNonRegles.length > 0 ? '#991B1B' : '#2A4E94' }}>
-                      {ecartsNonRegles.length} écart(s) non réglé(s)
-                    </div>
-                    <div className="text-xs" style={{ color: manquantsNonRegles.length > 0 ? '#B91C1C' : '#2A4E94' }}>
-                      {totalManquants > 0 && `⚠️ ${totalManquants.toLocaleString()} F`}
-                      {totalManquants > 0 && totalSurplus > 0 && ' · '}
-                      {totalSurplus > 0 && `🔵 ${totalSurplus.toLocaleString()} F`}
-                    </div>
-                  </div>
-                </div>
-                <span className="text-xs px-2 py-1 rounded-full font-medium"
-                  style={{
-                    backgroundColor: manquantsNonRegles.length > 0 ? '#FEE2E2' : '#E0E7FF',
-                    color: manquantsNonRegles.length > 0 ? '#991B1B' : '#2A4E94'
-                  }}>Voir →</span>
-              </button>
-            )}
-
-            {/* Fiche du jour */}
-            <div className="rounded-2xl p-5 flex items-center justify-between"
-              style={{
-                background: ficheDuJour ? 'linear-gradient(135deg, #F0FDF4, #DCFCE7)' : 'linear-gradient(135deg, #EEF2FF, #E0E7FF)',
-                border: `1px solid ${ficheDuJour ? '#BBF7D0' : '#C7D2FE'}`
-              }}>
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl"
-                  style={{ backgroundColor: ficheDuJour ? '#DCFCE7' : '#E0E7FF' }}>
-                  {ficheDuJour ? '✅' : '📝'}
-                </div>
-                <div>
-                  <div className="font-bold" style={{ color: ficheDuJour ? '#166534' : '#2A4E94' }}>
-                    {ficheDuJour ? 'Fiche soumise ✅' : 'Ma fiche du jour'}
-                  </div>
-                  {ficheDuJour && (
-                    <div className="flex gap-2 mt-1 flex-wrap">
-                      <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                        style={{
-                          backgroundColor: ficheDuJour.statut_validation === 'validee' ? '#DCFCE7' :
-                            ficheDuJour.statut_validation === 'rejetee' ? '#FEE2E2' :
-                            ficheDuJour.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF',
-                          color: ficheDuJour.statut_validation === 'validee' ? '#166534' :
-                            ficheDuJour.statut_validation === 'rejetee' ? '#991B1B' :
-                            ficheDuJour.statut_validation === 'a_corriger' ? '#854D0E' : '#2A4E94'
-                        }}>
-                        {ficheDuJour.statut_validation === 'validee' ? '✅ Validée' :
-                         ficheDuJour.statut_validation === 'rejetee' ? '❌ Rejetée' :
-                         ficheDuJour.statut_validation === 'a_corriger' ? '🔄 À corriger' : '⏳ En attente'}
-                      </span>
-                    </div>
-                  )}
-                  {ficheDuJour?.commentaire_chef && (
-                    <div className="text-xs mt-1 italic" style={{ color: '#166534' }}>
-                      💬 {ficheDuJour.commentaire_chef}
-                    </div>
-                  )}
-                  {!ficheDuJour && (
-                    <div className="text-xs mt-0.5" style={{ color: '#818387' }}>
-                      {new Date(today).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
-                    </div>
-                  )}
-                </div>
-              </div>
-              {!ficheDuJour && (
-                <button onClick={() => router.push('/dashboard/agent/fiche')}
-                  className="px-4 py-2.5 rounded-xl text-white text-sm font-semibold shrink-0"
-                  style={{ backgroundColor: '#2A4E94' }}>
-                  Remplir →
-                </button>
-              )}
-            </div>
-
-            {/* Bouton fiche antérieure */}
-            <button type="button" onClick={() => setShowDatePicker(true)}
-              className="w-full rounded-2xl p-4 flex items-center justify-between text-left"
-              style={{ backgroundColor: card, border: `1px dashed ${isDark ? '#475569' : '#cbd5e1'}` }}>
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
-                  style={{ backgroundColor: isDark ? '#334155' : '#f1f5f9' }}>📅</div>
-                <div>
-                  <div className="font-semibold text-sm" style={{ color: text }}>
-                    Saisir une fiche antérieure
-                  </div>
-                  <div className="text-xs mt-0.5" style={{ color: sub }}>
-                    Jusqu&apos;à 10 jours en arrière
-                  </div>
-                </div>
-              </div>
-              <span className="text-lg" style={{ color: sub }}>→</span>
-            </button>
-
-            {/* Résumé mensuel perso */}
-            <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-              <h2 className="text-sm font-bold mb-4" style={{ color: text }}>📊 Mon résumé du mois</h2>
-              <div className="grid grid-cols-2 gap-3">
-              {[
-                  { label: 'Jours actifs', value: joursActifs, icon: '📅' },
-                  { label: 'Comptes DAT', value: totalComptesDat, icon: '🏦' },
-                  { label: 'Collecté (SMART)', value: totalSmart.toLocaleString() + ' F', icon: '💵' },
-                  { label: 'Commissions', value: totalCommissions.toLocaleString() + ' F', icon: '💰' },
-                  { label: 'Adhésions', value: totalAdhesions, icon: '👥' },
-                  { label: 'Réactivations', value: totalReactivations, icon: '🔄' },
-                ].map(item => (
-                  <div key={item.label} className="text-center p-3 rounded-xl"
-                    style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                    <div className="text-2xl mb-1">{item.icon}</div>
-                    <div className="font-bold text-lg" style={{ color: '#2A4E94' }}>{item.value}</div>
-                    <div className="text-xs mt-0.5" style={{ color: sub }}>{item.label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
+          </section>
+          {fichesError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-red-800">{fichesError}</p>}
+          <button type="button" onClick={() => setActiveTab('equipe')} className="w-full rounded-2xl border p-5 text-left flex items-center justify-between gap-3" style={{ backgroundColor: card, borderColor: border, color: text }}><div><h2 className="font-bold">Le suivi de votre équipe</h2><p className="mt-1 text-sm" style={{ color: sub }}>{!agent?.equipe_id ? 'Aucune équipe rattachée' : pending.error ? 'Compteurs indisponibles — ouvrir pour réessayer' : pending.data ? `${pending.data.compteurs.en_attente} en attente · ${pending.data.compteurs.a_corriger} à corriger` : 'Actualisation des compteurs…'}</p></div><ArrowRight size={20} /></button>
+          <AgentInsights agentId={agent.id} hasAgency={!!agent.agence_id} mode="home" isDark={isDark} />
+        </>}
 
         {/* ════ FICHES (propres fiches du chef) ════ */}
         {activeTab === 'fiches' && (
           <div className="space-y-4">
             <h2 className="text-sm font-bold" style={{ color: text }}>📋 Mes fiches</h2>
+            {fichesLoading && (
+              <div className="rounded-2xl p-4 text-sm" style={{ backgroundColor: card, color: sub, border: `1px solid ${border}` }}>
+                Chargement de l&apos;historique…
+              </div>
+            )}
+            {fichesError && (
+              <div role="alert" className="rounded-2xl p-4 flex items-center justify-between gap-3" style={{ backgroundColor: '#FEF2F2', color: '#991B1B' }}>
+                <span className="text-sm">Impossible de charger les fiches : {fichesError}</span>
+                <button type="button" onClick={() => agent && loadFiches(agent.id)} className="text-xs font-semibold underline">Réessayer</button>
+              </div>
+            )}
             <div className="grid grid-cols-4 gap-2">
               {[
-                { label: 'Total', value: fiches.length, color: '#2A4E94', bg: '#EEF2FF' },
-                { label: 'Validées', value: fiches.filter(f => f.statut_validation === 'validee').length, color: '#166534', bg: '#F0FDF4' },
-                { label: 'Rejetées', value: fiches.filter(f => f.statut_validation === 'rejetee').length, color: '#991B1B', bg: '#FEF2F2' },
-                { label: 'En attente', value: fiches.filter(f => !f.statut_validation || f.statut_validation === 'en_attente').length, color: '#854D0E', bg: '#FEF9C3' },
+                { label: 'Total', value: fichesFiltrees.length, color: '#2A4E94', bg: '#EEF2FF' },
+                { label: 'Validées', value: fichesFiltrees.filter(f => f.statut_validation === 'validee').length, color: '#166534', bg: '#F0FDF4' },
+                { label: 'À corriger', value: fichesFiltrees.filter(f => f.statut_validation === 'a_corriger').length, color: '#854D0E', bg: '#FEF9C3' },
+                { label: 'En attente', value: fichesFiltrees.filter(f => !f.statut_validation || f.statut_validation === 'en_attente').length, color: '#854D0E', bg: '#FEF9C3' },
               ].map(s => (
                 <div key={s.label} className="rounded-2xl p-3 text-center" style={{ backgroundColor: s.bg }}>
                   <div className="font-bold text-lg" style={{ color: s.color }}>{s.value}</div>
@@ -859,7 +519,6 @@ const totalCollecte = totalSmart
               <div className="space-y-3">
                 {fichesFiltrees.map(fiche => {
                   const statutColor = fiche.statut_validation === 'validee' ? { bg: '#DCFCE7', color: '#166534', label: '✅ Validée' } :
-                    fiche.statut_validation === 'rejetee' ? { bg: '#FEE2E2', color: '#991B1B', label: '❌ Rejetée' } :
                     fiche.statut_validation === 'a_corriger' ? { bg: '#FEF9C3', color: '#854D0E', label: '🔄 À corriger' } :
                     { bg: '#EEF2FF', color: '#2A4E94', label: '⏳ En attente' }
                   return (
@@ -889,7 +548,7 @@ const totalCollecte = totalSmart
                           { label: 'Commission', value: `${(fiche.commission_jour || 0).toLocaleString()}F` },
                           { label: 'Comptes DAT', value: fiche.comptes_ouverts_dat ?? fiche.comptes_ouverts ?? 0 },
                           { label: 'Adhésions', value: fiche.nb_adhesions || 0 },
-                          { label: 'Réactiv.', value: fiche.reactivations?.length || 0 },
+                          { label: 'Réactiv.', value: fiche.reactivations?.filter((r: any) => r.reactif === true).length || 0 },
                         ].map(k => (
                           <div key={k.label} className="text-center p-2 rounded-xl" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
                             <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{k.value}</div>
@@ -899,13 +558,14 @@ const totalCollecte = totalSmart
                       </div>
                       {fiche.commentaire_chef && (
                         <div className="rounded-xl p-3 flex items-start gap-2 mb-3"
-                          style={{ backgroundColor: fiche.statut_validation === 'validee' ? '#F0FDF4' : fiche.statut_validation === 'rejetee' ? '#FEF2F2' : '#FEF9C3' }}>
+                          style={{ backgroundColor: fiche.statut_validation === 'validee' ? '#F0FDF4' : fiche.statut_validation === 'a_corriger' ? '#FEF9C3' : '#EEF2FF' }}>
                           <span>💬</span>
                           <p className="text-xs" style={{ color: statutColor.color }}>{fiche.commentaire_chef}</p>
                         </div>
                       )}
 
-                    <div className="flex gap-2">
+                    <AgentExportButtons target={{ type: 'fiche', ficheId: fiche.id }} />
+                    <div className="flex gap-2 mt-3">
                         <button type="button"
                           onClick={() => { setDetailFiche(fiche); setDetailCanValidate(false) }}
                           className="flex-1 py-2 rounded-xl text-xs font-semibold"
@@ -943,216 +603,9 @@ const totalCollecte = totalSmart
         )}
 
         {/* ════ ÉQUIPE ════ */}
-        {activeTab === 'equipe' && (
-          <div className="space-y-4">
-            <h2 className="text-sm font-bold" style={{ color: text }}>
-              👥 Mon équipe — {equipeInfo?.nom || '—'}
-            </h2>
+        {activeTab === 'equipe' && <TeamWorkspace teamId={agent.equipe_id} mode="queue" isDark={isDark} onDecision={() => { void pending.refresh(); void loadFiches(agent.id); void loadEquipe(agent) }} />}
 
-{/* Stats équipe */}
-<div className="grid grid-cols-2 gap-3">
-              {[
-                { label: 'Collecté (SMART)', value: equipeStats.totalCollecte.toLocaleString() + ' F', color: '#166534', bg: '#F0FDF4', icon: '💰' },
-                { label: 'Comptes DAT', value: equipeStats.totalComptes, color: '#2A4E94', bg: '#EEF2FF', icon: '🏦' },
-                { label: 'Commissions', value: equipeStats.totalCommissions.toLocaleString() + ' F', color: '#854D0E', bg: '#FEF9C3', icon: '💵' },
-                { label: 'Manquants', value: equipeStats.totalManquants.toLocaleString() + ' F', color: '#991B1B', bg: '#FEF2F2', icon: '⚠️' },
-                { label: 'Surplus', value: equipeStats.totalSurplus.toLocaleString() + ' F', color: '#2A4E94', bg: '#EEF2FF', icon: '🔵' },
-                { label: 'Fiches à valider', value: equipeStats.fichesNonValidees, color: '#854D0E', bg: '#FEF9C3', icon: '📋' },
-              ].map(s => (
-                <div key={s.label} className="rounded-2xl p-4 flex items-center gap-3" style={{ backgroundColor: s.bg }}>
-                  <span className="text-2xl">{s.icon}</span>
-                  <div>
-                    <div className="font-bold text-lg" style={{ color: s.color }}>{s.value}</div>
-                    <div className="text-xs" style={{ color: s.color, opacity: 0.8 }}>{s.label}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* Membres */}
-            {equipeMembers.length === 0 ? (
-              <div className="rounded-2xl p-8 text-center" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                <div className="text-4xl mb-3">👥</div>
-                <div className="font-medium text-sm" style={{ color: text }}>Aucun membre dans votre équipe</div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {equipeMembers.map(member => {
-                  const isSelected = selectedMember?.id === member.id
-                  return (
-                    <div key={member.id}>
-                      {/* Card membre */}
-                      <div className="rounded-2xl overflow-hidden"
-                        style={{
-                          backgroundColor: card,
-                          border: `1px solid ${isSelected ? '#2A4E94' : (membersPending[member.id] || 0) > 0 ? '#FCD34D' : border}`,
-                          boxShadow: isSelected ? '0 0 0 2px #2A4E94' : (membersPending[member.id] || 0) > 0 ? '0 0 0 1px #FCD34D' : undefined
-                        }}>
-                        <button type="button"
-                          onClick={() => isSelected ? setSelectedMember(null) : selectMember(member)}
-                          className="w-full p-4 flex items-center gap-3 text-left">
-                          <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white shrink-0"
-                            style={{ backgroundColor: '#2A4E94' }}>
-                            {member.prenom?.[0]}{member.nom?.[0]}
-                          </div>
-                          <div className="flex-1">
-                            <div className="font-semibold text-sm" style={{ color: text }}>{member.prenom} {member.nom}</div>
-                            <div className="text-xs" style={{ color: sub }}>{member.telephone || '—'}</div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {(membersPending[member.id] || 0) > 0 ? (
-                              <span className="text-xs px-2 py-1 rounded-full font-bold"
-                                style={{ backgroundColor: '#FEF3C7', color: '#B45309', border: '1px solid #FCD34D' }}>
-                                🟠 {membersPending[member.id]} à valider
-                              </span>
-                            ) : (
-                              <span className="text-xs px-2 py-1 rounded-full font-medium"
-                                style={{ backgroundColor: '#DCFCE7', color: '#166534' }}>
-                                ✅ À jour
-                              </span>
-                            )}
-                            <span className="text-sm" style={{ color: sub }}>{isSelected ? '▲' : '▼'}</span>
-                          </div>
-                        </button>
-
-                        {/* Fiches du membre */}
-                        {isSelected && (
-                          <div className="border-t px-4 pb-4" style={{ borderColor: border }}>
-                            <div className="pt-3 mb-3">
-                              <h4 className="text-xs font-semibold" style={{ color: sub }}>FICHES DE {member.prenom?.toUpperCase()}</h4>
-                            </div>
-
-                            {memberLoadingFiches ? (
-                              <div className="text-center py-4 text-sm" style={{ color: sub }}>Chargement...</div>
-                            ) : memberFiches.length === 0 ? (
-                              <div className="text-center py-4 text-sm" style={{ color: sub }}>Aucune fiche soumise</div>
-                            ) : (
-                              <div className="space-y-2">
-                                {/* Stats rapides membre */}
-                                <div className="grid grid-cols-3 gap-2 mb-3">
-                                {[
-                                    { label: 'Comptes DAT (mois)', value: memberFiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1)).reduce((s, f) => s + (f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0), 0) },
-                                    { label: 'SMART (mois)', value: (memberFiches.filter(f => new Date(f.date) >= new Date(new Date().getFullYear(), new Date().getMonth(), 1)).reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0) / 1000).toFixed(0) + 'k F' },
-                                    { label: 'Écarts non réglés', value: memberFiches.filter(f => getEcart(f) !== 0 && !f.manquant_regle).length },
-                                  ].map(k => (
-                                    <div key={k.label} className="text-center p-2 rounded-xl" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                                      <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{k.value}</div>
-                                      <div className="text-xs" style={{ color: sub }}>{k.label}</div>
-                                    </div>
-                                  ))}
-                                </div>
-
-                                {/* Liste fiches */}
-
-                                <div className="space-y-2 overflow-y-auto" style={{ maxHeight: '400px' }}>
-                                  {memberFiches.map(f => {
-                                    const peutValider = !f.statut_validation || f.statut_validation === 'en_attente' || f.statut_validation === 'a_corriger'
-                                    const ec = getEcart(f)
-                                    const statutC = f.statut_validation === 'validee' ? { bg: '#DCFCE7', color: '#166534', label: '✅ Validée' }
-                                      : f.statut_validation === 'rejetee' ? { bg: '#FEE2E2', color: '#991B1B', label: '❌ Rejetée' }
-                                      : f.statut_validation === 'a_corriger' ? { bg: '#FEF9C3', color: '#854D0E', label: '🔄 À corriger' }
-                                      : { bg: '#FEF3C7', color: '#B45309', label: '⏳ En attente' }
-                                    return (
-                                      <div key={f.id} className="rounded-xl p-3 border"
-                                        style={{
-                                          backgroundColor: isDark ? '#0f172a' : '#f8fafc',
-                                          borderColor: peutValider ? '#FCD34D' : border
-                                        }}>
-                                        {/* En-tête */}
-                                        <div className="flex items-start justify-between mb-2">
-                                          <div>
-                                            <div className="text-sm font-semibold" style={{ color: text }}>
-                                              {new Date(f.date).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'long' })}
-                                            </div>
-                                            <div className="text-xs mt-0.5" style={{ color: sub }}>
-                                              SMART {(f.montant_smart ?? f.montant_mobilise ?? 0).toLocaleString()} F
-                                            </div>
-                                          </div>
-                                          <div className="flex flex-col items-end gap-1">
-                                            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                              style={{ backgroundColor: statutC.bg, color: statutC.color }}>
-                                              {statutC.label}
-                                            </span>
-                                            {ec !== 0 && (
-                                              <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                                                style={{
-                                                  backgroundColor: f.manquant_regle ? '#DCFCE7' : ec > 0 ? '#FEE2E2' : '#E0E7FF',
-                                                  color: f.manquant_regle ? '#166534' : ec > 0 ? '#991B1B' : '#2A4E94'
-                                                }}>
-                                                {ec > 0 ? '⚠️' : '🔵'} {Math.abs(ec).toLocaleString()} F
-                                              </span>
-                                            )}
-                                          </div>
-                                        </div>
-
-                                        {/* Mini stats */}
-                                        <div className="grid grid-cols-4 gap-1 mb-2">
-                                          {[
-                                            { label: 'DAT', value: f.comptes_ouverts_dat ?? f.comptes_ouverts ?? 0 },
-                                            { label: 'Adhés.', value: f.nb_adhesions || 0 },
-                                            { label: 'Réact.', value: f.reactivations?.length || 0 },
-                                            { label: 'Augm.', value: f.augmentations_mise?.length || 0 },
-                                          ].map(k => (
-                                            <div key={k.label} className="text-center p-1.5 rounded-lg"
-                                              style={{ backgroundColor: isDark ? '#1e293b' : 'white' }}>
-                                              <div className="font-bold text-sm" style={{ color: '#2A4E94' }}>{k.value}</div>
-                                              <div style={{ fontSize: '10px', color: sub }}>{k.label}</div>
-                                            </div>
-                                          ))}
-                                        </div>
-
-                                        {f.commentaire_chef && (
-                                          <div className="mb-2 px-2 py-1 rounded-lg text-xs italic"
-                                            style={{ backgroundColor: isDark ? '#1e293b' : '#f1f5f9', color: sub }}>
-                                            💬 {f.commentaire_chef}
-                                          </div>
-                                        )}
-
-                                        
-
-                                        {/* Actions */}
-                                        <div className="flex gap-2">
-                                          <button type="button"
-                                            onClick={() => { setDetailFiche(f); setDetailCanValidate(peutValider) }}
-                                            className="flex-1 py-2 rounded-lg text-xs font-semibold"
-                                            style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
-                                            👁️ Détails
-                                          </button>
-                                          {peutValider && (
-                                            <button type="button"
-                                              onClick={() => {
-                                                setValidationFiche(f)
-                                                setValidationStatut('validee')
-                                                setValidationCommentaire('')
-                                                  setShowValidationModal(true)
-                                              }}
-                                              className="flex-1 py-2 rounded-lg text-xs font-semibold"
-                                              style={{ backgroundColor: '#F0FDF4', color: '#166534' }}>
-                                              ✅ Décider
-                                            </button>
-                                          )}
-                                        </div>
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ════ MANQUANTS (propres manquants) ════ */}
-{/* ════ ÉCARTS ════ */}
-{activeTab === 'manquants' && (
+        {activeTab === 'manquants' && (
           <div className="space-y-4">
             <h2 className="text-sm font-bold" style={{ color: text }}>⚖️ Mes écarts</h2>
             <div className="grid grid-cols-3 gap-3">
@@ -1446,95 +899,14 @@ const totalCollecte = totalSmart
         )}
 
         {/* ════ PERFORMANCE ════ */}
-        {activeTab === 'performance' && (
-          <div className="space-y-4">
-            <h2 className="text-sm font-bold" style={{ color: text }}>📈 Mes performances</h2>
-            <div className="space-y-3">
-            {[
-                { titre: 'Taux de conformité', valeur: tauxConformite, objectif: 100, icon: '🎯' },
-                { titre: 'Régularité', valeur: tauxRegularite, objectif: 100, icon: '📅' },
-                { titre: 'Score mensuel', valeur: scoreMensuel, objectif: 100, icon: '⭐' },
-              ].map(ind => {
-                const atteint = ind.valeur >= ind.objectif
-                const partiel = ind.valeur >= ind.objectif * 0.5
-                const barColor = atteint ? '#22C55E' : partiel ? '#EAB308' : '#EF4444'
-                const textC = atteint ? '#166534' : partiel ? '#854D0E' : '#991B1B'
-                return (
-                  <div key={ind.titre} className="rounded-2xl p-4" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{ind.icon}</span>
-                        <span className="font-semibold text-sm" style={{ color: text }}>{ind.titre}</span>
-                      </div>
-                      <span className="font-bold text-2xl" style={{ color: textC }}>{ind.valeur}%</span>
-                    </div>
-                    <div className="w-full h-3 rounded-full" style={{ backgroundColor: isDark ? '#334155' : '#f1f5f9' }}>
-                      <div className="h-3 rounded-full transition-all" style={{ width: `${Math.min(ind.valeur, 100)}%`, backgroundColor: barColor }} />
-                    </div>
-                    <div className="flex justify-between text-xs mt-1" style={{ color: sub }}>
-                      <span>{ind.valeur}%</span>
-                      <span>Objectif : {ind.objectif}%</span>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-              <h3 className="font-semibold text-sm mb-4" style={{ color: text }}>📊 Collecte — 7 derniers jours</h3>
-              <div className="flex items-end gap-2 h-28">
-                {sept7Jours.map((d, i) => {
-                  const maxVal = Math.max(...sept7Jours.map(x => x.montant), 1)
-                  const pct = Math.max(4, (d.montant / maxVal) * 100)
-                  const isToday = d.jour === new Date().toLocaleDateString('fr-FR', { weekday: 'short' })
-                  return (
-                    <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                      {d.montant > 0 && <div className="text-xs font-medium" style={{ color: '#2A4E94' }}>{(d.montant / 1000).toFixed(0)}k</div>}
-                      <div className="w-full rounded-t-lg" style={{ height: `${pct}%`, backgroundColor: isToday ? '#E4322C' : '#2A4E94', opacity: d.montant === 0 ? 0.2 : 1 }} />
-                      <div className="text-xs" style={{ color: sub }}>{d.jour}</div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Comparaison mois */}
-            <div className="rounded-2xl p-5" style={{ backgroundColor: card, border: `1px solid ${border}` }}>
-              <h3 className="font-semibold text-sm mb-3" style={{ color: text }}>📅 Ce mois vs mois précédent</h3>
-              {(() => {
-                const now = new Date()
-                const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1)
-                const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0)
-                const fichesPrev = fiches.filter(f => new Date(f.date) >= prevStart && new Date(f.date) <= prevEnd)
-                const collectePrev = fichesPrev.reduce((s, f) => s + (f.montant_smart ?? f.montant_mobilise ?? 0), 0)
-                const diff = totalCollecte - collectePrev
-                const pct = collectePrev > 0 ? Math.round((diff / collectePrev) * 100) : 0
-                return (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="rounded-xl p-3 text-center" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                      <div className="text-xs mb-1" style={{ color: sub }}>Mois précédent</div>
-                      <div className="font-bold" style={{ color: text }}>{collectePrev.toLocaleString()} F</div>
-                    </div>
-                    <div className="rounded-xl p-3 text-center" style={{ backgroundColor: isDark ? '#0f172a' : '#f8fafc' }}>
-                      <div className="text-xs mb-1" style={{ color: sub }}>Ce mois</div>
-                      <div className="font-bold" style={{ color: text }}>{totalCollecte.toLocaleString()} F</div>
-                    </div>
-                    <div className="col-span-2 rounded-xl p-3 text-center" style={{ backgroundColor: diff >= 0 ? '#F0FDF4' : '#FEF2F2' }}>
-                      <div className="font-bold text-lg" style={{ color: diff >= 0 ? '#166534' : '#991B1B' }}>
-                        {diff >= 0 ? '↑' : '↓'} {Math.abs(pct)}%
-                      </div>
-                      <div className="text-xs" style={{ color: diff >= 0 ? '#166534' : '#991B1B' }}>
-                        {diff >= 0 ? 'Progression' : 'Régression'} vs mois dernier
-                      </div>
-                    </div>
-                  </div>
-                )
-              })()}
-            </div>
+        {activeTab === 'performance' && <div className="space-y-5" style={{ color: text }}>
+          <h1 className="text-2xl font-bold tracking-tight">Statistiques et rapports</h1>
+          <div className="flex gap-2 rounded-2xl border p-1.5" style={{ backgroundColor: card, borderColor: border }}>
+            {([{ key: 'self', label: 'Mes performances' }, { key: 'team', label: 'Mon équipe' }] as const).map(scope => <button key={scope.key} type="button" aria-pressed={statsScope === scope.key} onClick={() => setStatsScope(scope.key)} className={`flex-1 rounded-xl px-3 py-3 text-sm font-semibold ${statsScope === scope.key ? 'bg-blue-900 text-white shadow-sm' : ''}`}>{scope.label}</button>)}
           </div>
-        )}
+          {statsScope === 'self' ? <AgentInsights agentId={agent.id} hasAgency={!!agent.agence_id} mode="stats" isDark={isDark} /> : <TeamWorkspace teamId={agent.equipe_id} mode="stats" isDark={isDark} onDecision={() => void pending.refresh()} />}
+        </div>}
 
-        {/* ════ MESSAGES ════ */}
         {activeTab === 'messages' && (
           <div className="space-y-4">
             <h2 className="text-sm font-bold" style={{ color: text }}>💬 Messagerie</h2>
@@ -1552,7 +924,7 @@ const totalCollecte = totalSmart
                   const lastMsg = msgsContact[msgsContact.length - 1]
                   const nonLus = messages.filter(m => m.expediteur_id === contact.id && m.destinataire_id === agent?.id && !m.lu).length
                   return (
-                    <button key={contact.id} type="button" onClick={() => setSelectedContact(contact)}
+                    <button key={contact.id} type="button" onClick={() => ouvrirConversation(contact)}
                       className="w-full rounded-2xl p-4 flex items-center gap-3 text-left"
                       style={{ backgroundColor: card, border: `1px solid ${border}` }}>
                       <div className="w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg text-white shrink-0"
@@ -1730,9 +1102,7 @@ const totalCollecte = totalSmart
                   { label: 'Rôle', value: 'Chef d\'équipe' },
                   { label: 'Équipe', value: equipeInfo?.nom || '—' },
                   { label: 'Agence', value: agent?.agences?.nom || '—' },
-                  { label: 'Membres dans l\'équipe', value: equipeMembers.length },
                   { label: 'Mes fiches', value: fiches.length },
-                  { label: 'Streak', value: `🔥 ${streak} jour(s)` },
                 ].map(item => (
                   <div key={item.label} className="flex justify-between py-2 border-b last:border-0" style={{ borderColor: border }}>
                     <span className="text-xs" style={{ color: sub }}>{item.label}</span>
@@ -1752,38 +1122,12 @@ const totalCollecte = totalSmart
 
       </div>
 
-      {/* ── NAVIGATION BAS ── */}
-      <div className="fixed bottom-0 left-0 right-0 border-t shadow-lg"
-        style={{ backgroundColor: card, borderColor: border }}>
-        <div className="max-w-2xl mx-auto flex">
-          {[
-            { key: 'accueil', label: 'Accueil', icon: '🏠' },
-            { key: 'fiches', label: 'Mes fiches', icon: '📋' },
-            { key: 'equipe', label: 'Équipe', icon: '👥', badge: equipeStats.fichesNonValidees },
-            { key: 'manquants', label: 'Écarts', icon: '⚖️', badge: ecartsNonRegles.length + ecartsEquipe.filter(f => f.agent_id !== agent?.id && !f.manquant_regle).length },
-            { key: 'performance', label: 'Stats', icon: '📈' },
-            { key: 'messages', label: 'Messages', icon: '💬', badge: messagesNonLus },
-            { key: 'profil', label: 'Profil', icon: '👤' },
-          ].map(t => (
-            <button key={t.key} type="button"
-              onClick={() => setActiveTab(t.key as ActiveTab)}
-              className="flex-1 flex flex-col items-center py-2 text-xs font-medium transition-all relative">
-              <span className="text-lg mb-0.5">{t.icon}</span>
-              <span style={{ fontSize: '9px', color: activeTab === t.key ? '#2A4E94' : sub }}>{t.label}</span>
-              {t.badge && t.badge > 0 && (
-                <span className="absolute top-1 right-0.5 w-4 h-4 rounded-full flex items-center justify-center text-xs font-bold text-white"
-                  style={{ backgroundColor: '#E4322C', fontSize: '9px' }}>
-                  {t.badge > 9 ? '9+' : t.badge}
-                </span>
-              )}
-              {activeTab === t.key && (
-                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-5 h-0.5 rounded-full"
-                  style={{ backgroundColor: '#2A4E94' }} />
-              )}
-            </button>
-          ))}
+      {showMore && <div className="fixed inset-0 z-40 bg-slate-950/30" onClick={() => setShowMore(false)}><div className="absolute bottom-24 right-4 left-4 sm:left-auto sm:w-80 rounded-2xl border p-3 shadow-xl" style={{ backgroundColor: card, borderColor: border }} onClick={e => e.stopPropagation()}>{([{ key: 'manquants', label: 'Écarts et régularisations' }, { key: 'messages', label: `Messages${messagesNonLus ? ` (${messagesNonLus})` : ''}` }, { key: 'profil', label: 'Mon profil' }] as const).map(t => <button type="button" key={t.key} onClick={() => { setActiveTab(t.key); setShowMore(false) }} className="block w-full rounded-xl px-4 py-3 text-left text-sm font-semibold hover:bg-blue-50 hover:text-blue-900" style={{ color: text }}>{t.label}</button>)}</div></div>}
+      <nav aria-label="Navigation chef" className="fixed bottom-0 left-0 right-0 z-40 border-t shadow-lg" style={{ backgroundColor: card, borderColor: border, paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        <div className="max-w-6xl mx-auto flex">
+          {[{ key: 'accueil', label: 'Accueil', Icon: Home }, { key: 'fiches', label: 'Mes fiches', Icon: Files }, { key: 'equipe', label: 'Équipe', Icon: Users }, { key: 'performance', label: 'Statistiques', Icon: ChartNoAxesCombined }, { key: 'plus', label: 'Plus', Icon: Menu }].map(t => <button key={t.key} type="button" aria-current={activeTab === t.key ? 'page' : undefined} onClick={() => t.key === 'plus' ? setShowMore(v => !v) : setActiveTab(t.key as ActiveTab)} className="relative flex-1 flex flex-col items-center gap-1.5 py-3 text-xs font-semibold" style={{ color: activeTab === t.key ? '#2563eb' : sub }}><t.Icon size={21} /><span>{t.label}</span>{t.key === 'equipe' && pending.data && pending.data.compteurs.en_attente > 0 && <span className="absolute top-1 right-1/4 rounded-full bg-blue-900 px-1.5 text-xs text-white">{pending.data.compteurs.en_attente}</span>}</button>)}
         </div>
-      </div>
+      </nav>
 
       {/* Padding bas */}
       <div className="h-20" />
@@ -1827,7 +1171,7 @@ const totalCollecte = totalSmart
           <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl overflow-hidden">
             <div className="px-6 py-4 border-b flex items-center justify-between" style={{ borderColor: '#f1f5f9' }}>
               <h3 className="font-bold text-lg" style={{ color: '#1a1a2e' }}>📋 Décision sur la fiche</h3>
-              <button type="button" onClick={() => setShowValidationModal(false)}
+              <button type="button" disabled={validationBusy} onClick={() => setShowValidationModal(false)}
                 className="p-2 rounded-lg" style={{ backgroundColor: '#f1f5f9', color: '#818387' }}>✕</button>
             </div>
             <div className="p-6 space-y-5">
@@ -1841,7 +1185,7 @@ const totalCollecte = totalSmart
                   {(validationFiche.comptes_ouverts_dat ?? validationFiche.comptes_ouverts ?? 0)} comptes DAT
                 </div>
                 {(() => {
-                  const e = (validationFiche.montant_smart ?? validationFiche.montant_mobilise ?? 0) - (validationFiche.montant_caisse ?? validationFiche.montant_rapporte ?? 0)
+                  const e = getEcart(validationFiche)
                   if (e === 0) return null
                   return (
                     <div className="text-xs mt-1 font-semibold"
@@ -1854,12 +1198,11 @@ const totalCollecte = totalSmart
 
               <div>
                 <label className="block text-xs font-semibold mb-3" style={{ color: '#1a1a2e' }}>Décision</label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   {[
                     { key: 'validee', label: '✅ Valider', bg: '#F0FDF4', color: '#166534', activeBg: '#166534' },
-                    { key: 'rejetee', label: '❌ Rejeter', bg: '#FEF2F2', color: '#991B1B', activeBg: '#991B1B' },
-                    { key: 'a_corriger', label: '🔄 Corriger', bg: '#FEF9C3', color: '#854D0E', activeBg: '#854D0E' },
-                  ].map(s => (
+                    { key: 'a_corriger', label: '🔄 Demander une correction', bg: '#FEF9C3', color: '#854D0E', activeBg: '#854D0E' },
+                  ].filter(s => s.key === 'validee' || !validationFiche.statut_validation || validationFiche.statut_validation === 'en_attente').map(s => (
                     <button key={s.key} type="button" onClick={() => setValidationStatut(s.key)}
                       className="py-3 rounded-xl text-xs font-semibold transition-all"
                       style={{
@@ -1880,7 +1223,7 @@ const totalCollecte = totalSmart
                 <textarea value={validationCommentaire} onChange={e => setValidationCommentaire(e.target.value)} rows={3}
                   className="w-full px-4 py-3 rounded-xl border text-sm outline-none resize-none"
                   style={{ borderColor: '#e2e8f0' }}
-                  placeholder={validationStatut === 'validee' ? 'Bravo ! (optionnel)' : validationStatut === 'rejetee' ? 'Motif du rejet...' : 'Ce qui doit être corrigé...'} />
+                  placeholder={validationStatut === 'validee' ? 'Bravo ! (optionnel)' : 'Ce qui doit être corrigé...'} />
               </div>
 
               <div className="rounded-xl p-3 flex items-center gap-2" style={{ backgroundColor: '#EEF2FF' }}>
@@ -1889,19 +1232,27 @@ const totalCollecte = totalSmart
               </div>
 
               <div className="flex gap-3">
-                <button type="button" onClick={() => setShowValidationModal(false)}
+                <button type="button" disabled={validationBusy} onClick={() => setShowValidationModal(false)}
                   className="flex-1 py-3 rounded-xl text-sm font-semibold border" style={{ borderColor: '#e2e8f0', color: '#818387' }}>
                   Annuler
                 </button>
                 <button type="button"
+                  disabled={validationBusy}
                   onClick={async () => {
-                    await validerFicheChef(validationFiche.id, validationStatut, validationCommentaire)
-                    setShowValidationModal(false)
-                    setValidationCommentaire('')
+                    if (validationLock.current) return
+                    validationLock.current = true; setValidationBusy(true)
+                    let ok = false
+                    try { ok = await validerFicheChef(validationFiche.id, validationStatut, validationCommentaire) }
+                    catch { alert('Décision impossible. Réessayez.') }
+                    finally { validationLock.current = false; setValidationBusy(false) }
+                    if (ok) {
+                      setShowValidationModal(false)
+                      setValidationCommentaire('')
+                    }
                   }}
                   className="flex-1 py-3 rounded-xl text-sm font-semibold text-white"
-                  style={{ backgroundColor: validationStatut === 'validee' ? '#166534' : validationStatut === 'rejetee' ? '#991B1B' : '#854D0E' }}>
-                  Confirmer
+                  style={{ backgroundColor: validationStatut === 'validee' ? '#166534' : '#854D0E' }}>
+                  {validationBusy ? 'Enregistrement…' : 'Confirmer'}
                 </button>
               </div>
             </div>

@@ -1,4 +1,6 @@
-const CACHE_NAME = 'percom-v1'
+const CACHE_NAME = 'percom-v2'
+const IS_LOCAL_DEVELOPMENT = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(self.location.hostname)
+  || self.location.hostname.endsWith('.localhost')
 
 const STATIC_ASSETS = [
   '/',
@@ -10,6 +12,11 @@ const STATIC_ASSETS = [
 
 // Installation — mise en cache des ressources statiques
 self.addEventListener('install', event => {
+  if (IS_LOCAL_DEVELOPMENT) {
+    event.waitUntil(self.skipWaiting())
+    return
+  }
+
   console.log('[SW] Installation...')
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
@@ -24,6 +31,23 @@ self.addEventListener('install', event => {
 // Activation — nettoyage des anciens caches
 self.addEventListener('activate', event => {
   console.log('[SW] Activation...')
+
+  if (IS_LOCAL_DEVELOPMENT) {
+    event.waitUntil(
+      Promise.all([
+        caches.keys().then(cacheNames =>
+          Promise.all(
+            cacheNames
+              .filter(name => name.startsWith('percom-'))
+              .map(name => caches.delete(name))
+          )
+        ),
+        self.registration.unregister(),
+      ])
+    )
+    return
+  }
+
   event.waitUntil(
     caches.keys().then(cacheNames =>
       Promise.all(
@@ -38,8 +62,13 @@ self.addEventListener('activate', event => {
 
 // Fetch — stratégie Network First avec fallback cache
 self.addEventListener('fetch', event => {
+  if (IS_LOCAL_DEVELOPMENT) return
+
   const { request } = event
   const url = new URL(request.url)
+
+  // Authenticated reports and API responses must never enter an offline cache.
+  if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) return
 
   // Ignorer les requêtes non-HTTP
   if (!request.url.startsWith('http')) return

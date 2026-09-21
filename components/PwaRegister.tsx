@@ -1,17 +1,31 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { clearLocalPercomWorker, isLoopbackHost } from '@/lib/pwa-local'
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
+}
 
 export default function PwaRegister() {
   const [showUpdate, setShowUpdate] = useState(false)
   const [showInstall, setShowInstall] = useState(false)
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null)
 
   useEffect(() => {
+    if (process.env.NODE_ENV !== 'production' || isLoopbackHost(window.location.hostname)) {
+      // Un service worker de développement peut servir un ancien bundle Next.js
+      // avec le HTML actuel et provoquer un échec d'hydratation.
+      void clearLocalPercomWorker().catch(error => console.warn('[PERCOM] Nettoyage du cache local impossible.', error))
+
+      return
+    }
+
     // Enregistrer le service worker
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
-        .register('/sw.js')
+        .register('/sw.js', { updateViaCache: 'none' })
         .then(registration => {
           console.log('[SW] Enregistré:', registration.scope)
 
@@ -29,18 +43,29 @@ export default function PwaRegister() {
     }
 
     // Détecter si installable (Android Chrome)
-    window.addEventListener('beforeinstallprompt', (e: any) => {
-      e.preventDefault()
-      setDeferredPrompt(e)
+    const handleBeforeInstallPrompt = (event: Event) => {
+      const promptEvent = event as BeforeInstallPromptEvent
+      promptEvent.preventDefault()
+      setDeferredPrompt(promptEvent)
       // Afficher le bouton d'installation après 3 secondes
-      setTimeout(() => setShowInstall(true), 3000)
-    })
+      installPromptTimer = window.setTimeout(() => setShowInstall(true), 3000)
+    }
 
     // Cacher le bouton si déjà installé
-    window.addEventListener('appinstalled', () => {
+    const handleAppInstalled = () => {
       setShowInstall(false)
       setDeferredPrompt(null)
-    })
+    }
+
+    let installPromptTimer: number | undefined
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+    window.addEventListener('appinstalled', handleAppInstalled)
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt)
+      window.removeEventListener('appinstalled', handleAppInstalled)
+      if (installPromptTimer) window.clearTimeout(installPromptTimer)
+    }
   }, [])
 
   function handleUpdate() {

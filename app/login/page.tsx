@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
 
-type Mode = 'login' | 'register' | 'pending' | 'blocked' | 'forgot' | 'forgot_sent'
+type Mode = 'login' | 'pending' | 'blocked' | 'forgot' | 'forgot_sent'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -14,11 +14,6 @@ export default function LoginPage() {
   const [error, setError] = useState('')
 
   const [loginForm, setLoginForm] = useState({ email: '', password: '' })
-  const [registerForm, setRegisterForm] = useState({
-    prenom: '', nom: '', email: '', telephone: '', agence: '', password: '', confirm: ''
-  })
-
-  const agences = ['Agence Assivito', 'Agence Assigame', 'Agence Adidoadin', 'Agence Sagbado']
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
@@ -38,7 +33,7 @@ export default function LoginPage() {
 
     const { data: agent } = await supabase
       .from('agents')
-      .select('role, statut')
+      .select('role, statut, actif')
       .eq('user_id', data.user.id)
       .single()
 
@@ -63,67 +58,18 @@ export default function LoginPage() {
       return
     }
 
+    if (agent.statut !== 'actif' || agent.actif !== true) {
+      await supabase.auth.signOut()
+      setMode('blocked')
+      setLoading(false)
+      return
+    }
+
     if (agent.role === 'admin') router.push('/dashboard/admin')
       else if (agent.role === 'dg') router.push('/dashboard/dg')
       else if (agent.role === 'responsable') router.push('/dashboard/responsable')
       else if (agent.role === 'chef') router.push('/dashboard/chef')
       else router.push('/dashboard/agent')
-  }
-
-  async function handleRegister(e: React.FormEvent) {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-
-    if (registerForm.password !== registerForm.confirm) {
-      setError('Les mots de passe ne correspondent pas')
-      setLoading(false)
-      return
-    }
-
-    if (registerForm.password.length < 8) {
-      setError('Le mot de passe doit contenir au moins 8 caractères')
-      setLoading(false)
-      return
-    }
-
-    const { data, error: authError } = await supabase.auth.signUp({
-      email: registerForm.email,
-      password: registerForm.password,
-    })
-
-    if (authError) {
-      setError(authError.message)
-      setLoading(false)
-      return
-    }
-
-    if (!data.user) {
-      setError('Erreur lors de la création du compte')
-      setLoading(false)
-      return
-    }
-
-    const { data: agenceData } = await supabase
-      .from('agences')
-      .select('id')
-      .eq('nom', registerForm.agence)
-      .single()
-
-    await supabase.from('agents').insert({
-      user_id: data.user.id,
-      nom: registerForm.nom,
-      prenom: registerForm.prenom,
-      telephone: registerForm.telephone,
-      agence_id: agenceData?.id || null,
-      role: 'agent',
-      actif: false,
-      statut: 'en_attente',
-    })
-
-    await supabase.auth.signOut()
-    setMode('pending')
-    setLoading(false)
   }
 
   async function handleForgot(e: React.FormEvent) {
@@ -343,25 +289,9 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Toggle */}
-          <div className="flex rounded-2xl p-1 mb-8" style={{ backgroundColor: '#f1f5f9' }}>
-            {[
-              { key: 'login', label: 'Connexion' },
-              { key: 'register', label: 'Créer un compte' },
-            ].map(tab => (
-              <button
-                key={tab.key}
-                type="button"
-                onClick={() => { setMode(tab.key as Mode); setError('') }}
-                className="flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all"
-                style={{
-                  backgroundColor: mode === tab.key ? 'white' : 'transparent',
-                  color: mode === tab.key ? '#2A4E94' : '#818387',
-                  boxShadow: mode === tab.key ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                }}>
-                {tab.label}
-              </button>
-            ))}
+          <div className="rounded-2xl p-3 mb-8 text-xs text-center"
+            style={{ backgroundColor: '#EEF2FF', color: '#2A4E94' }}>
+            Les comptes PERCOM sont créés par un administrateur PADES.
           </div>
 
           {/* Formulaire connexion */}
@@ -413,93 +343,6 @@ export default function LoginPage() {
             </div>
                 {error && <ErrorBox message={error} />}
                 <SubmitButton loading={loading} label="Se connecter" />
-              </form>
-            </>
-          )}
-
-          {/* Formulaire inscription */}
-          {mode === 'register' && (
-            <>
-              <div className="mb-8">
-                <h2 className="text-3xl font-bold" style={{ color: '#1a1a2e' }}>Créer un compte 🚀</h2>
-                <p className="mt-2 text-sm" style={{ color: '#818387' }}>
-                  Votre compte sera activé par un administrateur
-                </p>
-              </div>
-
-              <form onSubmit={handleRegister} className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <InputField label="Prénom" type="text" value={registerForm.prenom}
-                    onChange={v => setRegisterForm(p => ({ ...p, prenom: v }))}
-                    placeholder="Jean" icon="user" required />
-                  <InputField label="Nom" type="text" value={registerForm.nom}
-                    onChange={v => setRegisterForm(p => ({ ...p, nom: v }))}
-                    placeholder="Kodjo" icon="user" required />
-                </div>
-
-                <InputField label="Adresse email" type="email" value={registerForm.email}
-                  onChange={v => setRegisterForm(p => ({ ...p, email: v }))}
-                  placeholder="votre@email.com" icon="email" required />
-
-                <InputField label="Téléphone" type="tel" value={registerForm.telephone}
-                  onChange={v => setRegisterForm(p => ({ ...p, telephone: v }))}
-                  placeholder="+228 9X XX XX XX" icon="phone" />
-
-                <div>
-                  <label className="block text-sm font-semibold mb-2" style={{ color: '#1a1a2e' }}>
-                    Agence
-                  </label>
-                  <select
-                    value={registerForm.agence}
-                    onChange={e => setRegisterForm(p => ({ ...p, agence: e.target.value }))}
-                    className="w-full px-4 py-3.5 rounded-xl border bg-white text-sm outline-none"
-                    style={{ borderColor: '#e2e8f0', color: registerForm.agence ? '#1a1a2e' : '#818387' }}
-                    required>
-                    <option value="">Sélectionnez votre agence</option>
-                    {agences.map(a => <option key={a} value={a}>{a}</option>)}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold mb-2" style={{ color: '#1a1a2e' }}>
-                    Mot de passe
-                  </label>
-                  <div className="relative">
-                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                      <LockIcon />
-                    </div>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      value={registerForm.password}
-                      onChange={e => setRegisterForm(p => ({ ...p, password: e.target.value }))}
-                      className="w-full pl-12 pr-12 py-3.5 rounded-xl border bg-white text-sm outline-none"
-                      style={{ borderColor: '#e2e8f0', color: '#1a1a2e' }}
-                      onFocus={e => e.target.style.borderColor = '#2A4E94'}
-                      onBlur={e => e.target.style.borderColor = '#e2e8f0'}
-                      placeholder="Min. 8 caractères"
-                      required />
-                    <button type="button" onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 right-0 pr-4 flex items-center">
-                      <EyeIcon show={showPassword} />
-                    </button>
-                  </div>
-                </div>
-
-                <InputField label="Confirmer le mot de passe" type="password"
-                  value={registerForm.confirm}
-                  onChange={v => setRegisterForm(p => ({ ...p, confirm: v }))}
-                  placeholder="Répétez le mot de passe" icon="lock" required />
-
-                {error && <ErrorBox message={error} />}
-
-                <div className="rounded-xl p-4" style={{ backgroundColor: '#EEF2FF' }}>
-                  <p className="text-xs leading-relaxed" style={{ color: '#2A4E94' }}>
-                    ℹ️ Après inscription, votre compte sera en attente de validation par un
-                    administrateur PADES avant de pouvoir vous connecter.
-                  </p>
-                </div>
-
-                <SubmitButton loading={loading} label="Créer mon compte" />
               </form>
             </>
           )}
