@@ -33,5 +33,7 @@ export function useTeamRpc<T>(name: string, args: Record<string, unknown>, enabl
       .on('postgres_changes', { event: '*', schema: 'public', table: 'agents' }, visible).subscribe() : null
     return () => { cancel(); clearTimeout(initial); clearInterval(timer); window.removeEventListener('focus', visible); window.removeEventListener('online', visible); if (channel) void supabase.removeChannel(channel) }
   }, [cancel, enabled, name, refresh])
-  return { ...(state.key === key && enabled ? state : { data: null, error: '', busy: enabled }), refresh }
+  // The query key is internal bookkeeping, never a React prop.
+  const current = state.key === key && enabled
+  return { data: current ? state.data : null, error: current ? state.error : '', busy: current ? state.busy : enabled, refresh }
 }

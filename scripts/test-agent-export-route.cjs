@@ -14,8 +14,8 @@ Module._load = function(name, parent, isMain) {
     clientOptions = { url, key, options }
     return {
       auth: { getUser: async token => { assert.equal(token, 'test-session'); return { data: { user: authenticated ? { id: owner } : null }, error: null } } },
-      from: () => { const query = { select: () => query, eq: () => query, single: async () => ({ data: { id: owner, role, actif: active, statut: active ? 'actif' : 'suspendu' }, error: null }) }; return query },
-      rpc: async (name, args) => { calls.push({ name, args }); return { data: rpcFailure ? { ok: false, erreur: 'internal SQL must not leak' } : name === 'rapport_intervalle' ? fixture.report : name === 'rapport_equipe' ? JSON.parse(fs.readFileSync('.next/lot6-validation/fixture.json', 'utf8')) : name === 'rapport_agence' ? JSON.parse(fs.readFileSync('.next/lot7-validation/fixture.json', 'utf8')) : null, error: null } },
+      from: table => { const query = { select: () => query, eq: () => query, maybeSingle: async () => ({data: {nom: table === 'agences' ? 'Agence authentifiée' : 'Cible authentifiée'},error:null}), single: async () => ({ data: { id: owner, role, actif: active, statut: active ? 'actif' : 'suspendu' }, error: null }) }; return query },
+      rpc: async (name, args) => { calls.push({ name, args }); return { data: rpcFailure ? { ok: false, erreur: 'internal SQL must not leak' } : name === 'rapport_reseau' ? {...JSON.parse(fs.readFileSync('.next/lot9-validation/fixture.json','utf8')),filtres:{agence_id:args.p_agence_id,equipe_id:args.p_equipe_id,membre_id:args.p_membre_id,agence_active:args.p_agence_active}} : name === 'rapport_intervalle' ? fixture.report : name === 'rapport_equipe' ? JSON.parse(fs.readFileSync('.next/lot6-validation/fixture.json', 'utf8')) : name === 'rapport_agence' ? JSON.parse(fs.readFileSync('.next/lot7-validation/fixture.json', 'utf8')) : null, error: null } },
     }
   } }
   return originalLoad.call(this, name.startsWith('@/') ? path.resolve(name.slice(2)) : name, parent, isMain)
@@ -30,7 +30,7 @@ async function main() {
   assert.equal((await POST(request(input, false))).status, 401)
   authenticated = false; assert.equal((await POST(request())).status, 401); authenticated = true
   active = false; assert.equal((await POST(request())).status, 403); active = true
-  role = 'dg'; assert.equal((await POST(request())).status, 403); role = 'agent'
+  role = 'admin'; assert.equal((await POST(request())).status, 403); role = 'agent'
   for (const statuts of [[], [null], ['inconnu']]) assert.equal((await POST(request({ ...input, statuts }))).status, 400)
   assert.equal((await POST(request({ ...input, periode: { debut: '2026-09-03', fin: '2026-09-01' } }))).status, 400)
   assert.equal((await POST(request({ ...input, periode: { debut: '2024-01-01', fin: '2026-09-01' } }))).status, 400)
@@ -66,6 +66,37 @@ async function main() {
   assert.equal((await POST(request({ ...input, type: 'agence', agentId: undefined, agenceId: 'untrusted' }))).status, 200)
   assert.equal(calls.at(-1).name, 'rapport_agence')
   assert.equal(calls.at(-1).args.p_agence_id, undefined)
+  role = 'dg'
+  const filtres = { agenceId: member, equipeId: null, membreId: null, agenceActive: false }
+  const network = { ...input, agentId: undefined, type: 'reseau', filtres }
+  const networkXlsx=await POST(request(network));assert.equal(networkXlsx.status,200)
+  const xlsxBytes=Buffer.from(await networkXlsx.arrayBuffer())
+  fs.writeFileSync('.next/lot9-validation/reseau.xlsx',xlsxBytes)
+  const ExcelJS=require('exceljs'),workbook=new ExcelJS.Workbook();await workbook.xlsx.load(xlsxBytes)
+  const cover=workbook.worksheets[0];assert.equal(cover.name,'Synthèse & périmètre')
+  assert.equal(cover.getCell('B7').value,'Agence authentifiée')
+  assert.equal(cover.getCell('B10').value,'Inactives et sans agence')
+  assert.ok(cover.views[0].ySplit>6)
+  assert.ok(cover.autoFilter)
+  for(const sheet of workbook.worksheets)assert.equal(sheet.getCell('B7').value,'Agence authentifiée')
+
+  const networkPdf=await POST(request({...network,format:'pdf'}));assert.equal(networkPdf.status,200)
+  const pdfBytes=Buffer.from(await networkPdf.arrayBuffer());assert.equal(pdfBytes.subarray(0,4).toString(),'%PDF')
+  fs.writeFileSync('.next/lot9-validation/reseau.pdf',pdfBytes)
+  assert.deepEqual(calls.at(-1).args, { p_date_debut: input.periode.debut, p_date_fin: input.periode.fin, p_statuts: input.statuts, p_agence_id: member, p_equipe_id: null, p_membre_id: null, p_agence_active: false })
+  for(const sections of [[],['synthese','synthese'],['forbidden'],null]) assert.equal((await POST(request({...network,sections}))).status,400)
+  const selectedXlsx=await POST(request({...network,sections:['assurances','agences']}));assert.equal(selectedXlsx.status,200)
+  const customBytes=Buffer.from(await selectedXlsx.arrayBuffer());fs.writeFileSync('.next/lot9-validation/reseau-personnalise.xlsx',customBytes)
+  const customBook=new ExcelJS.Workbook();await customBook.xlsx.load(customBytes)
+  assert.deepEqual(customBook.worksheets.map(s=>s.name),['Par agence','Assurances'])
+  assert.equal(customBook.worksheets[0].getCell('B7').value,'Agence authentifiée')
+  const selectedPdf=await POST(request({...network,format:'pdf',sections:['assurances']}));assert.equal(selectedPdf.status,200)
+  fs.writeFileSync('.next/lot9-validation/reseau-vide-personnalise.pdf',Buffer.from(await selectedPdf.arrayBuffer()))
+  for (const filtres of [null, {}, { ...network.filtres, agenceActive: 'false' }, { ...network.filtres, agenceId: 'invalid' }]) assert.equal((await POST(request({ ...network, filtres }))).status, 400)
+  assert.equal((await POST(request({ ...input, agentId: undefined, type: 'agence' }))).status, 400)
+  assert.equal((await POST(request({ ...input, agentId: undefined, type: 'agence', agenceId: member }))).status, 200)
+  assert.equal(calls.at(-1).args.p_agence_id, member)
+  role = 'responsable'; assert.equal((await POST(request(network))).status, 403)
   role = 'agent'
   assert.equal((await POST(request({ ...input, type: 'agence' }))).status, 403)
   role = 'responsable'

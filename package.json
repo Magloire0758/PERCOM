@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:agent": "node scripts/test-agent-reporting.cjs && node scripts/test-team-reporting.cjs && node scripts/test-agency-reporting.cjs && node scripts/test-agent-export-route.cjs"
+    "test:agent": "node scripts/test-agent-reporting.cjs && node scripts/test-team-reporting.cjs && node scripts/test-agency-reporting.cjs && node scripts/test-network-reporting.cjs && node scripts/test-agent-export-route.cjs"
   },
   "dependencies": {
     "@next/font": "^14.2.15",

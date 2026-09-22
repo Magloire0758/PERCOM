@@ -2,7 +2,7 @@ import { METRICS, formatDate, type Comparison, type DailyReport, type IntervalRe
 
 export type Column = { key: string; label: string; money?: boolean }
 export type Section = { title: string; columns: Column[]; rows: ReportRow[] }
-export type ExportModel = { title: string; agent: string; period: string; status: string; generated: string; sections: Section[] }
+export type ExportModel = { title: string; agent: string; period: string; status: string; generated: string; selectionLabel?: string; scope?: { label: string; value: string }[]; sections: Section[] }
 const cols = (items: [string, string, boolean?][]): Column[] => items.map(([key, label, money]) => ({ key, label, money }))
 const summaryColumns = cols([['label', 'Indicateur'], ['value', 'Valeur'], ['unit', 'Unité']])
 const reactivationColumns = cols([['date', 'Date'], ['n_client', 'N° client'], ['nom_prenom', 'Client'], ['produit', 'Produit'], ['mise', 'Mise', true], ['nouvelle_mise', 'Nouvelle mise', true], ['montant_cotise', 'Cotisation', true], ['reactif', 'Effective'], ['commentaire', 'Commentaire']])

@@ -4,7 +4,8 @@ export type Period = { debut: string; fin: string }
 export type ExportRequest = { format: 'pdf' | 'xlsx' } & (
   | { type: 'fiche'; ficheId: string }
   | { type: 'equipe'; equipeId?: string; periode: Period; statuts: Statut[]; inclureChef: boolean }
-  | { type: 'agence'; periode: Period; statuts: Statut[] }
+  | { type: 'reseau'; sections?: import('./network-export-sections').NetworkSectionId[]; filtres: import('./network-reporting').NetworkFilters; periode: Period; statuts: Statut[] }
+  | { type: 'agence'; agenceId?: string; periode: Period; statuts: Statut[] }
   | { type: 'intervalle' | 'statistiques'; agentId?: string; periode: Period; statuts: Statut[] }
 )
 
