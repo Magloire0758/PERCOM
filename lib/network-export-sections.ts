@@ -14,3 +14,14 @@ export function selectNetworkSections(model: ExportModel, selected?: NetworkSect
   const titles=NETWORK_SECTIONS.filter(([id])=>selected.includes(id)).map(([,title])=>title)
   return {...model,selectionLabel:selected.length===NETWORK_SECTIONS.length?'Rapport complet':`Rapport personnalisé · ${selected.length} section(s)`,sections:model.sections.filter(s=>titles.some(t=>t===s.title))}
 }
+
+export const AGENCY_SECTIONS = NETWORK_SECTIONS.filter(([id]) => id !== 'agences')
+export function validAgencySections(value: unknown): value is NetworkSectionId[] {
+  return validNetworkSections(value) && !value.includes('agences')
+}
+export function selectAgencySections(model: ExportModel, selected?: NetworkSectionId[]): ExportModel {
+  if (selected === undefined) return model
+  if (!validAgencySections(selected)) throw new Error('Sections agence invalides.')
+  const titles = AGENCY_SECTIONS.filter(([id]) => selected.includes(id)).map(([id, title]) => id === 'collaborateurs' ? 'Par membre' : id === 'journees' ? 'Par jour' : title)
+  return { ...model, selectionLabel: selected.length === AGENCY_SECTIONS.length ? 'Rapport complet' : `Rapport personnalisé · ${selected.length} section(s)`, sections: model.sections.filter(s => titles.some(t => t === s.title)) }
+}

@@ -43,6 +43,13 @@ export function agencyModel(r: AgencyReport) {
     section.rows = section.rows.map(row => ({ ...row, equipe_nom: names.get(row.equipe_id as string | null) || (row.equipe_id ? 'Équipe rattachée' : 'Sans équipe') }))
     if (section.title === 'Augmentations') section.rows = section.rows.map(row => ({ ...row, hausse: Math.max(Number(row.nouvelle_mise ?? 0) - Number(row.ancienne_mise ?? 0), 0) }))
   }
+  model.scope = [
+    { label: 'Agence', value: r.agence.nom },
+    { label: 'Période', value: model.period },
+    { label: 'Équipe', value: 'Toutes les équipes, sans équipe inclus' },
+    { label: 'Collaborateurs', value: 'Agents et chefs, contributions des suspendus conservées' },
+    { label: 'Données incluses', value: r.statuts.map(s => ({validee:'Fiches validées',en_attente:'En attente',a_corriger:'À corriger'})[s]).join(', ') },
+  ]
   return model
 }
 // UTC construction on day 1 prevents end-of-month rollover and local timezone shifts.

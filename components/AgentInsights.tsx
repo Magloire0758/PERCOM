@@ -2,13 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { METRICS, assertRpc, checkReport, formatDate, formatNumber, monthPeriod, todayLome, validPeriod, type Aggregates, type Comparison, type IntervalReport, type Objectives, type Ranking, type Regularity, type Statut } from '@/lib/agent-reporting'
+import { METRICS, assertRpc, checkReport, formatDate, formatNumber, monthPeriod, todayLome, validPeriod, type Period, type Aggregates, type Comparison, type IntervalReport, type Objectives, type Ranking, type Regularity, type Statut } from '@/lib/agent-reporting'
 import AgentExportButtons from './AgentExportButtons'
 
 type Snapshot = { totals: Aggregates; regularity: Regularity; objectives: Objectives; ranking: Ranking | null; report: IntervalReport | null; comparison: Comparison | null }
-export default function AgentInsights({ agentId, hasAgency, mode, isDark }: { agentId: string; hasAgency: boolean; mode: 'home' | 'stats'; isDark: boolean }) {
-  const [period, setPeriod] = useState(() => monthPeriod())
-  const [preview, setPreview] = useState(false)
+export default function AgentInsights({ agentId, hasAgency, mode, isDark, initialPeriod, initialPreview = false }: { initialPeriod?: Period; initialPreview?: boolean; agentId: string; hasAgency: boolean; mode: 'home' | 'stats'; isDark: boolean }) {
+  const [period, setPeriod] = useState(() => initialPeriod || monthPeriod())
+  const [preview, setPreview] = useState(initialPreview)
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(true)

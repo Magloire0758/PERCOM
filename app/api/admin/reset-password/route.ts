@@ -4,11 +4,11 @@ import { NextRequest, NextResponse } from 'next/server'
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const userId = typeof body.userId === 'string' ? body.userId.trim() : ''
+    const agentId = typeof body.agentId === 'string' ? body.agentId.trim() : ''
     const newPassword = typeof body.newPassword === 'string' ? body.newPassword : ''
     const callerToken = typeof body.callerToken === 'string' ? body.callerToken : ''
 
-    if (!userId || !newPassword || !callerToken) {
+    if (!agentId || !newPassword || !callerToken) {
       return NextResponse.json({ ok: false, error: 'Paramètres manquants.' }, { status: 400 })
     }
     if (newPassword.length < 8) {
@@ -48,18 +48,25 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Accès refusé (admin actif requis).' }, { status: 403 })
     }
 
+    const target = await admin.from('agents').select('user_id,role').eq('id', agentId).single()
+    if (target.error || !target.data?.user_id || !['agent','chef','responsable','dg'].includes(target.data.role)) {
+      return NextResponse.json({ok:false,error:'Compte PERCOM cible invalide ou protégé.'},{status:403})
+    }
+    const userId = target.data.user_id
+
     // 3. Réinitialiser le mot de passe de l'utilisateur cible
     const { error: updateErr } = await admin.auth.admin.updateUserById(userId, {
       password: newPassword,
     })
 
     if (updateErr) {
-      return NextResponse.json({ ok: false, error: updateErr.message }, { status: 400 })
+      return NextResponse.json({ ok: false, error: 'Réinitialisation impossible.' }, { status: 400 })
     }
 
     return NextResponse.json({ ok: true })
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erreur serveur.'
+    void error
+    const message = 'Réinitialisation impossible.'
     return NextResponse.json({ ok: false, error: message }, { status: 500 })
   }
 }

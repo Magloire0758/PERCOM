@@ -45,7 +45,7 @@ export default function DashboardChef() {
   const [ecartsEquipe, setEcartsEquipe] = useState<any[]>([])
   const [selectedEcart, setSelectedEcart] = useState<any>(null)
   const [equipeError, setEquipeError] = useState('')
-  const [statsScope, setStatsScope] = useState<'self' | 'team'>('self')
+  const [statsScope, setStatsScope] = useState<'self' | 'team'>('team')
   const [showMore, setShowMore] = useState(false)
   const [validationBusy, setValidationBusy] = useState(false)
   const validationLock = useRef(false)
@@ -902,7 +902,7 @@ export default function DashboardChef() {
         {activeTab === 'performance' && <div className="space-y-5" style={{ color: text }}>
           <h1 className="text-2xl font-bold tracking-tight">Statistiques et rapports</h1>
           <div className="flex gap-2 rounded-2xl border p-1.5" style={{ backgroundColor: card, borderColor: border }}>
-            {([{ key: 'self', label: 'Mes performances' }, { key: 'team', label: 'Mon équipe' }] as const).map(scope => <button key={scope.key} type="button" aria-pressed={statsScope === scope.key} onClick={() => setStatsScope(scope.key)} className={`flex-1 rounded-xl px-3 py-3 text-sm font-semibold ${statsScope === scope.key ? 'bg-blue-900 text-white shadow-sm' : ''}`}>{scope.label}</button>)}
+            {([{ key: 'team', label: 'Performances de l’équipe' }, { key: 'self', label: 'Mes performances' }] as const).map(scope => <button key={scope.key} type="button" aria-pressed={statsScope === scope.key} onClick={() => setStatsScope(scope.key)} className={`flex-1 rounded-xl px-3 py-3 text-sm font-semibold ${statsScope === scope.key ? 'bg-blue-900 text-white shadow-sm' : ''}`}>{scope.label}</button>)}
           </div>
           {statsScope === 'self' ? <AgentInsights agentId={agent.id} hasAgency={!!agent.agence_id} mode="stats" isDark={isDark} /> : <TeamWorkspace teamId={agent.equipe_id} mode="stats" isDark={isDark} onDecision={() => void pending.refresh()} />}
         </div>}

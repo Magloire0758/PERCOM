@@ -28,6 +28,7 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       )
     }
+    if (equipeId && !['agent','chef'].includes(role)) return NextResponse.json({ok:false,error:'Un rôle de gestion ne peut pas être membre d’une équipe.'},{status:400})
     if (equipeId && !agenceId) {
       return NextResponse.json(
         { ok: false, error: "Une agence doit être choisie avant l'équipe." },
@@ -95,7 +96,7 @@ export async function POST(request: NextRequest) {
     })
     if (createError || !created.user) {
       return NextResponse.json(
-        { ok: false, error: createError?.message || 'Création Auth échouée.' },
+        { ok: false, error: 'Création du compte impossible. Vérifiez les informations saisies.' },
         { status: 400 },
       )
     }
@@ -117,14 +118,15 @@ export async function POST(request: NextRequest) {
       const { error: cleanupError } = await admin.auth.admin.deleteUser(created.user.id)
       if (cleanupError) console.error('create-user: échec de compensation Auth', cleanupError.message)
       return NextResponse.json(
-        { ok: false, error: `Profil non créé : ${insertError.message}` },
+        { ok: false, error: cleanupError ? 'Profil non créé. Une intervention administrateur est nécessaire pour terminer le nettoyage du compte.' : 'Profil non créé. La création du compte a été annulée.' },
         { status: 500 },
       )
     }
 
     return NextResponse.json({ ok: true, userId: created.user.id }, { status: 201 })
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Erreur serveur.'
+    void error
+    const message = 'Création du compte impossible.'
     return NextResponse.json({ ok: false, error: message }, { status: 500 })
   }
 }

@@ -1,9 +1,9 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowLeft, ChevronLeft, ChevronRight, RefreshCw, Users, FileCheck2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { assertRpc, formatDate, formatNumber, monthPeriod, validPeriod, type DailyReport, type Statut } from '@/lib/agent-reporting'
+import { assertRpc, formatDate, formatNumber, monthPeriod, validPeriod, type Period, type DailyReport, type Statut } from '@/lib/agent-reporting'
 import { dailyModel, type ExportModel } from '@/lib/agent-export-model'
 import { checkTeamReport, availableTeamMetrics, type TeamAggregates, type TeamQueue, type TeamReport, type TeamRanking, type QueueRow } from '@/lib/team-reporting'
 import { useTeamRpc } from '@/lib/use-team-rpc'
@@ -14,10 +14,10 @@ const button = 'inline-flex items-center justify-center gap-2 rounded-xl border 
 const input = 'mt-1 block w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 text-sm'
 const labels = { en_attente: 'En attente', a_corriger: 'À corriger', validee: 'Validées' }
 
-export default function TeamWorkspace({ teamId, mode, isDark, onDecision, explicitExport = false }: { teamId: string | null; mode: 'queue' | 'stats'; isDark: boolean; onDecision: () => void; explicitExport?: boolean }) {
+export default function TeamWorkspace({ teamId, mode, isDark, onDecision, explicitExport = false, initialPeriod, initialPreview = false }: { teamId: string | null; mode: 'queue' | 'stats'; isDark: boolean; onDecision: () => void; explicitExport?: boolean; initialPeriod?: Period; initialPreview?: boolean }) {
   const [includeInactive, setIncludeInactive] = useState(false)
-  const [period, setPeriod] = useState(monthPeriod)
-  const [preview, setPreview] = useState(false)
+  const [period, setPeriod] = useState(() => initialPeriod || monthPeriod())
+  const [preview, setPreview] = useState(initialPreview)
   const [includeChef, setIncludeChef] = useState(true)
   const [member, setMember] = useState('')
   const [status, setStatus] = useState<Statut>('en_attente')
@@ -63,7 +63,7 @@ export default function TeamWorkspace({ teamId, mode, isDark, onDecision, explic
         <div className="grid gap-3 lg:grid-cols-2">{queue.data.fiches.map(f => <article key={f.fiche_id} className="rounded-2xl border p-5 shadow-sm" style={panel}><div className="flex justify-between gap-2"><div><h3 className="font-semibold">{f.prenom} {f.nom}{f.est_moi ? ' · Moi' : ''}</h3><p className="mt-1 text-sm opacity-70">{formatDate(f.date)} · {f.anciennete_jours} jour(s)</p>{!f.membre_actif && <span className="text-xs text-amber-700">Compte inactif / suspendu</span>}</div><span className="h-fit rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-700">{labels[f.statut]}</span></div><div className="my-4 grid grid-cols-2 gap-3"><div><p className="text-xs opacity-70">SMART</p><p className="font-bold">{formatNumber(f.smart)} F</p></div><div><p className="text-xs opacity-70">Caisse</p><p className="font-bold">{formatNumber(f.caisse)} F</p></div></div><button className={button + ' w-full'} onClick={() => setSelected(f)}>Ouvrir la fiche</button></article>)}</div>
       </>}
     </>}
-    {mode === 'stats' && member && <div className="space-y-4"><h3 className="text-lg font-bold">Performances de {selectedName?.prenom} {selectedName?.nom}</h3><p className="text-sm opacity-70">Rapport individuel du membre sélectionné, distinct du rapport consolidé d’équipe.</p><AgentInsights key={member} agentId={member} hasAgency={false} mode="stats" isDark={isDark} /></div>}
+    {mode === 'stats' && member && <div className="space-y-4"><h3 className="text-lg font-bold">Performances de {selectedName?.prenom} {selectedName?.nom}</h3><p className="text-sm opacity-70">Rapport individuel du membre sélectionné, distinct du rapport consolidé d’équipe.</p><AgentInsights initialPeriod={period} initialPreview={preview} key={member} agentId={member} hasAgency={false} mode="stats" isDark={isDark} /></div>}
     {mode === 'stats' && !member && <>
       <div className="rounded-2xl border p-4 space-y-4" style={panel}><div className="grid gap-3 sm:grid-cols-3"><label className="text-sm">Du<input className={input} type="date" value={period.debut} onChange={e => setPeriod(p => ({ ...p, debut: e.target.value }))} /></label><label className="text-sm">Au<input className={input} type="date" value={period.fin} onChange={e => setPeriod(p => ({ ...p, fin: e.target.value }))} /></label><button className={button + ' self-end'} onClick={() => setPeriod(monthPeriod())}>Mois en cours</button></div><label className="block text-sm">Données équipe<select className={input} value={preview ? 'preview' : 'official'} onChange={e => setPreview(e.target.value === 'preview')}><option value="official">Officiel — fiches validées</option><option value="preview">Prévisualisation — tous statuts</option></select></label><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeChef} onChange={e => setIncludeChef(e.target.checked)} />Inclure les chefs dans les résultats</label><p className="text-xs opacity-70">FCFA · Lomé · 366 jours maximum · Membres actuellement rattachés, y compris suspendus.</p></div>
       {!valid && <p role="alert" className="text-red-600">Choisissez une période valide de 366 jours maximum.</p>}
@@ -82,7 +82,8 @@ export default function TeamWorkspace({ teamId, mode, isDark, onDecision, explic
   </section>
 }
 
-export function DecisionSheet({ row, onClose, onDone }: { row: QueueRow; onClose: () => void; onDone: () => void }) {
+export function DecisionSheet({ row, onClose, onDone, drawer = false, previous, next, position, restoreFocus }: { row: QueueRow; onClose: () => void; onDone: () => void; drawer?: boolean; previous?: () => void; next?: () => void; position?: string; restoreFocus?: HTMLElement | null }) {
+  const titleId = useId()
   const detail = useTeamRpc<DailyReport>('rapport_fiche_journaliere', { p_fiche_id: row.fiche_id })
   const [action, setAction] = useState('valider')
   const [comment, setComment] = useState('')
@@ -90,7 +91,7 @@ export function DecisionSheet({ row, onClose, onDone }: { row: QueueRow; onClose
   const [error, setError] = useState('')
   const lock = useRef(false)
   const dialog = useRef<HTMLDialogElement>(null)
-  useEffect(() => { dialog.current?.showModal() }, [])
+  useEffect(() => { const trigger = restoreFocus || document.activeElement as HTMLElement | null; dialog.current?.showModal(); return () => { if (trigger?.isConnected) trigger.focus({preventScroll:true}) } }, [restoreFocus])
   const currentStatus = detail.data?.entete.statut
   const canAct = !!detail.data && currentStatus !== 'validee' && row.peut_traiter
   async function submit() {
@@ -103,12 +104,13 @@ export function DecisionSheet({ row, onClose, onDone }: { row: QueueRow; onClose
     } catch (e) { setError(e instanceof Error ? e.message : 'Décision impossible.'); void detail.refresh() }
     finally { lock.current = false; setBusy(false) }
   }
-  return <dialog ref={dialog} onCancel={e => { e.preventDefault(); if (!busy) onClose() }} className="m-auto w-[calc(100%-2rem)] max-w-3xl max-h-[90vh] rounded-3xl border-0 bg-white p-0 text-slate-900 shadow-2xl backdrop:bg-slate-950/60">
-    <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b bg-white p-5"><div><h2 className="text-xl font-bold">Fiche du {formatDate(row.date)}</h2><p className="text-sm text-slate-500">{row.prenom} {row.nom}{row.est_moi ? ' · Votre fiche' : ''}</p></div><button className={button} disabled={busy} onClick={onClose}><ArrowLeft size={16} />Fermer</button></div>
+  return <dialog ref={dialog} aria-labelledby={titleId} onCancel={e => { e.preventDefault(); if (!busy) onClose() }} className={(drawer ? 'fixed inset-y-0 left-auto right-0 m-0 h-dvh max-h-dvh w-full max-w-none rounded-none sm:w-[min(56rem,90vw)] sm:rounded-l-3xl' : 'm-auto w-[calc(100%-2rem)] max-w-3xl max-h-[90vh] rounded-3xl') + ' overflow-y-auto border-0 bg-white p-0 text-slate-900 shadow-2xl backdrop:bg-slate-950/60'}>
+    <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b bg-white p-5"><div><h2 id={titleId} className="text-xl font-bold">Fiche du {formatDate(row.date)}</h2><p className="text-sm text-slate-500">{row.prenom} {row.nom}{row.est_moi ? ' · Votre fiche' : ''}</p></div><button className={button} disabled={busy} onClick={onClose}><ArrowLeft size={16} />Fermer</button></div>
+    {drawer && <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-slate-50 px-5 py-3"><p className="text-xs text-slate-500">{position} · Dans la page affichée</p><div className="flex gap-2"><button aria-label="Fiche précédente" className={button} disabled={busy || !previous} onClick={previous}>Précédente</button><button aria-label="Fiche suivante" className={button} disabled={busy || !next} onClick={next}>Suivante</button></div></div>}
     <div className="space-y-5 p-5">{detail.busy && <p role="status">Chargement du rapport complet…</p>}{detail.error && <p role="alert" className="text-red-700">{detail.error}</p>}
-      {detail.data && <><AgentExportButtons target={{ type: 'fiche', ficheId: row.fiche_id }} /><ReportPreview model={dailyModel(detail.data)} /></>}
       {canAct && <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4 space-y-3"><h3 className="font-bold">Décision sur cette fiche</h3><label className="block text-sm">Action<select className={input} value={action} disabled={busy} onChange={e => setAction(e.target.value)}><option value="valider">Valider la fiche</option>{currentStatus === 'en_attente' && <option value="demander_correction">Demander une correction</option>}</select></label><label className="block text-sm">Commentaire {action === 'demander_correction' ? '(obligatoire)' : '(facultatif)'}<textarea className={input} rows={3} value={comment} disabled={busy} onChange={e => setComment(e.target.value)} /></label><button className={button + ' bg-blue-900 text-white'} disabled={busy || detail.busy || (action === 'demander_correction' && !comment.trim())} onClick={() => void submit()}>{busy ? 'Enregistrement…' : 'Confirmer la décision'}</button></div>}
       {error && <p role="alert" className="text-red-700">{error}</p>}
+      {detail.data && <><AgentExportButtons target={{ type: 'fiche', ficheId: row.fiche_id }} /><ReportPreview model={dailyModel(detail.data)} /></>}
     </div>
   </dialog>
 }

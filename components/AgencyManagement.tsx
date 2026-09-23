@@ -11,6 +11,7 @@ import { useTeamRpc } from '@/lib/use-team-rpc'
 import type { Objectives } from '@/lib/agent-reporting'
 import RegularisationModal from './RegularisationModal'
 import EcartHistorique from './EcartHistorique'
+import ObjectiveProgressCards from './ObjectiveProgressCards'
 import { DecisionSheet } from './TeamWorkspace'
 import type { QueueRow } from '@/lib/team-reporting'
 
@@ -61,7 +62,7 @@ export function AgencyObjectives({ self, members, teams, onChange }: { self: Age
 }
 function IndividualGoals({ id, date }: { id: string; date: string }) {
   const rpc = useTeamRpc<Objectives>('agent_objectifs_avec_progression', { p_agent_id: id, p_date: date })
-  return <section className={panel}><h3 className="mb-4 font-bold">Progression du collaborateur</h3><ReadState {...rpc} />{rpc.data?.objectifs.map(o => <div key={o.id} className="mb-4"><h4 className="font-semibold">{o.titre}</h4><p className="text-xs text-slate-500">{formatDate(o.date_debut)} – {formatDate(o.date_fin)}</p>{o.progressions.map(p => <p key={p.champ} className="mt-2 text-sm">{p.libelle} : <strong>{formatNumber(p.realise)} / {formatNumber(p.cible)}</strong> · {formatNumber(p.pct)} %</p>)}</div>)}{rpc.data?.objectifs.length === 0 && <p className="text-sm text-slate-500">Aucun objectif actif à cette date.</p>}</section>
+  return <section className={panel}><h3 className="mb-4 font-bold">Progression du collaborateur</h3><ReadState {...rpc} retry={rpc.refresh}/>{rpc.data && <ObjectiveProgressCards goals={rpc.data.objectifs.map(o=>({...o,progressions:o.progressions.map(p=>({...p,mesurable:p.realise!==null && p.pct!==null}))}))}/>}</section>
 }
 function GoalEditor({ goal, self, members, teams, onClose, onDone }: { goal: Goal | null; self: AgencySelf; members: AgencyPerson[]; teams: TeamOption[]; onClose: () => void; onDone: () => void }) {
   const month = goal?.annee && goal.mois ? { debut: `${goal.annee}-${String(goal.mois).padStart(2,'0')}-01`, fin: new Date(Date.UTC(goal.annee,goal.mois,0)).toISOString().slice(0,10) } : monthPeriod()

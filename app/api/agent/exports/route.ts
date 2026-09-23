@@ -1,4 +1,4 @@
-import { validNetworkSections, selectNetworkSections } from '@/lib/network-export-sections'
+import { validNetworkSections, selectNetworkSections, validAgencySections, selectAgencySections } from '@/lib/network-export-sections'
 import { networkModel, networkArgs, validNetworkFilters, NO_ATTACHMENT, type NetworkNames, type NetworkReport } from '@/lib/network-reporting'
 import { teamModel, type TeamReport } from '@/lib/team-reporting'
 import { agencyModel, type AgencyReport } from '@/lib/agency-reporting'
@@ -27,16 +27,16 @@ async function exportRequest(request: Request) {
   const { data: auth, error: authError } = await client.auth.getUser(token)
   if (authError || !auth.user) return fail('Session expirée. Reconnectez-vous.', 401)
   const { data: agent, error: agentError } = await client.from('agents').select('id, role, actif, statut').eq('user_id', auth.user.id).single()
-  if (agentError || !agent || !['agent', 'chef', 'responsable', 'dg'].includes(agent.role) || agent.actif !== true || agent.statut !== 'actif') return fail('Compte actif autorisé requis.', 403)
+  if (agentError || !agent || !['agent', 'chef', 'responsable', 'dg', 'admin'].includes(agent.role) || agent.actif !== true || agent.statut !== 'actif') return fail('Compte actif autorisé requis.', 403)
   let body
   try { body = await request.json() } catch { return fail('Requête invalide.', 400) }
   if (!body || !['pdf', 'xlsx'].includes(body.format) || !['fiche', 'intervalle', 'statistiques', 'equipe', 'agence', 'reseau'].includes(body.type)) return fail('Format ou rapport invalide.', 400)
-  if (body.type === 'equipe' && !['chef', 'responsable', 'dg'].includes(agent.role)) return fail('Compte chef ou responsable requis.', 403)
-  if (body.type === 'agence' && !['responsable', 'dg'].includes(agent.role)) return fail('Compte responsable requis.', 403)
-  if (body.type === 'reseau' && agent.role !== 'dg') return fail('Compte direction requis.', 403)
-  if (body.sections !== undefined && (body.type !== 'reseau' || !validNetworkSections(body.sections))) return fail('Choisissez au moins une section valide, sans doublon.', 400)
+  if (body.type === 'equipe' && !['chef', 'responsable', 'dg', 'admin'].includes(agent.role)) return fail('Compte chef ou responsable requis.', 403)
+  if (body.type === 'agence' && !['responsable', 'dg', 'admin'].includes(agent.role)) return fail('Compte responsable requis.', 403)
+  if (body.type === 'reseau' && !['dg', 'admin'].includes(agent.role)) return fail('Compte direction requis.', 403)
+  if (body.sections !== undefined && !(body.type === 'reseau' ? validNetworkSections(body.sections) : body.type === 'agence' ? validAgencySections(body.sections) : false)) return fail('Choisissez au moins une section valide, sans doublon.', 400)
   // An agent always exports self; a chef may choose a target, authorized by each RPC.
-  const target = ['chef', 'responsable', 'dg'].includes(agent.role) && body.agentId !== undefined ? body.agentId : agent.id
+  const target = ['chef', 'responsable', 'dg', 'admin'].includes(agent.role) && body.agentId !== undefined ? body.agentId : agent.id
   if (typeof target !== 'string' || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(target)) return fail('Identifiant membre invalide.', 400)
   try {
     let model: ExportModel
@@ -71,14 +71,14 @@ async function exportRequest(request: Request) {
         }))
         model = selectNetworkSections(networkModel(report,names),body.sections)
       } else if (body.type === 'agence') {
-        if (agent.role === 'dg' && (typeof body.agenceId !== 'string' || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(body.agenceId))) return fail('Agence requise.', 400)
+        if (['dg', 'admin'].includes(agent.role) && (typeof body.agenceId !== 'string' || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(body.agenceId))) return fail('Agence requise.', 400)
         // Agency is derived by the RPC from the authenticated RA, never from the body.
-        const result = await client.rpc('rapport_agence', { ...(agent.role === 'dg' ? { p_agence_id: body.agenceId } : {}), p_date_debut: p.debut, p_date_fin: p.fin, p_statuts: [...new Set(body.statuts)] })
-        model = agencyModel(assertRpc<AgencyReport>(result.data, result.error))
+        const result = await client.rpc('rapport_agence', { ...(['dg', 'admin'].includes(agent.role) ? { p_agence_id: body.agenceId } : {}), p_date_debut: p.debut, p_date_fin: p.fin, p_statuts: [...new Set(body.statuts)] })
+        model = selectAgencySections(agencyModel(assertRpc<AgencyReport>(result.data, result.error)), body.sections)
       } else if (body.type === 'equipe') {
         if (typeof body.inclureChef !== 'boolean') return fail('Périmètre équipe invalide.', 400)
-        if (['responsable', 'dg'].includes(agent.role) && (typeof body.equipeId !== 'string' || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(body.equipeId))) return fail('Équipe requise.', 400)
-        const result = await client.rpc('rapport_equipe', { ...(['responsable', 'dg'].includes(agent.role) ? { p_equipe_id: body.equipeId } : {}), p_date_debut: p.debut, p_date_fin: p.fin, p_statuts: [...new Set(body.statuts)], p_inclure_chef: body.inclureChef })
+        if (['responsable', 'dg', 'admin'].includes(agent.role) && (typeof body.equipeId !== 'string' || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(body.equipeId))) return fail('Équipe requise.', 400)
+        const result = await client.rpc('rapport_equipe', { ...(['responsable', 'dg', 'admin'].includes(agent.role) ? { p_equipe_id: body.equipeId } : {}), p_date_debut: p.debut, p_date_fin: p.fin, p_statuts: [...new Set(body.statuts)], p_inclure_chef: body.inclureChef })
         model = teamModel(assertRpc<TeamReport>(result.data, result.error))
       } else {
         const args = { p_agent_id: target, p_date_debut: p.debut, p_date_fin: p.fin }

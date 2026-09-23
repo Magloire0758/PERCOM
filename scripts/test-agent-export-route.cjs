@@ -30,7 +30,7 @@ async function main() {
   assert.equal((await POST(request(input, false))).status, 401)
   authenticated = false; assert.equal((await POST(request())).status, 401); authenticated = true
   active = false; assert.equal((await POST(request())).status, 403); active = true
-  role = 'admin'; assert.equal((await POST(request())).status, 403); role = 'agent'
+  role = 'inconnu'; assert.equal((await POST(request())).status, 403); role = 'agent'
   for (const statuts of [[], [null], ['inconnu']]) assert.equal((await POST(request({ ...input, statuts }))).status, 400)
   assert.equal((await POST(request({ ...input, periode: { debut: '2026-09-03', fin: '2026-09-01' } }))).status, 400)
   assert.equal((await POST(request({ ...input, periode: { debut: '2024-01-01', fin: '2026-09-01' } }))).status, 400)
@@ -44,6 +44,9 @@ async function main() {
   assert.equal(clientOptions.options.global.headers.Authorization, 'Bearer test-session')
   assert.equal(clientOptions.options.auth.persistSession, false)
   assert.ok((await ok.arrayBuffer()).byteLength > 100)
+  role = 'admin'
+  assert.equal((await POST(request({...input,agentId:owner}))).status,200)
+  assert.equal(calls.at(-1).args.p_agent_id,owner)
   role = 'chef'
   const member = '22222222-2222-4222-8222-222222222222'
   assert.equal((await POST(request({ ...input, agentId: member }))).status, 200)
@@ -66,6 +69,19 @@ async function main() {
   assert.equal((await POST(request({ ...input, type: 'agence', agentId: undefined, agenceId: 'untrusted' }))).status, 200)
   assert.equal(calls.at(-1).name, 'rapport_agence')
   assert.equal(calls.at(-1).args.p_agence_id, undefined)
+  role = 'dg'
+  role = 'responsable'
+  const agencyInput = {...input,type:'agence',agentId:undefined,agenceId:'untrusted'}
+  for (const sections of [[],['agences'],['synthese','synthese'],['forbidden'],null]) assert.equal((await POST(request({...agencyInput,sections}))).status,400)
+  const agencySelected = await POST(request({...agencyInput,sections:['assurances','collaborateurs']})); assert.equal(agencySelected.status,200)
+  assert.equal(calls.at(-1).args.p_agence_id,undefined)
+  const agencyBytes = Buffer.from(await agencySelected.arrayBuffer())
+  fs.writeFileSync('.next/lot7-validation/agence-personnalise.xlsx',agencyBytes)
+  const AgencyExcel = require('exceljs'), agencyBook = new AgencyExcel.Workbook(); await agencyBook.xlsx.load(agencyBytes)
+  assert.deepEqual(agencyBook.worksheets.map(s=>s.name),['Par membre','Assurances'])
+  for(const sheet of agencyBook.worksheets) assert.equal(sheet.getCell('B6').value,'Agence Démonstration')
+  const agencyPdf = await POST(request({...agencyInput,format:'pdf',sections:['assurances']}));assert.equal(agencyPdf.status,200)
+  fs.writeFileSync('.next/lot7-validation/agence-vide-personnalise.pdf',Buffer.from(await agencyPdf.arrayBuffer()))
   role = 'dg'
   const filtres = { agenceId: member, equipeId: null, membreId: null, agenceActive: false }
   const network = { ...input, agentId: undefined, type: 'reseau', filtres }
@@ -96,6 +112,14 @@ async function main() {
   assert.equal((await POST(request({ ...input, agentId: undefined, type: 'agence' }))).status, 400)
   assert.equal((await POST(request({ ...input, agentId: undefined, type: 'agence', agenceId: member }))).status, 200)
   assert.equal(calls.at(-1).args.p_agence_id, member)
+  role = 'admin'
+  assert.equal((await POST(request(network))).status,200)
+  assert.equal((await POST(request({...input,agentId:undefined,type:'agence'}))).status,400)
+  assert.equal((await POST(request({...input,agentId:undefined,type:'agence',agenceId:member}))).status,200)
+  assert.equal(calls.at(-1).args.p_agence_id,member)
+  assert.equal((await POST(request({...input,agentId:undefined,type:'equipe',equipeId:member,inclureChef:true}))).status,200)
+  assert.equal(calls.at(-1).args.p_equipe_id,member)
+  active=false;assert.equal((await POST(request(network))).status,403);active=true
   role = 'responsable'; assert.equal((await POST(request(network))).status, 403)
   role = 'agent'
   assert.equal((await POST(request({ ...input, type: 'agence' }))).status, 403)

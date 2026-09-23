@@ -6,7 +6,7 @@ export const COMMERCIAL_METRICS = [
  ['augmentations_nb','Augmentations de mise',false],['augmentations_montant','Hausse des mises',true],
  ['assurances_nb','Assurances',false],['assurances_montant','Montant assurances',true],
 ] as const
-export function commercialSeries(r:NetworkReport,level:'agence'|'equipe',metric:string):ChartPoint[] {
+export function commercialSeries(r:Pick<NetworkReport,'par_agence'|'par_equipe'|'details_reactivations'|'details_augmentations'|'details_assurances'>,level:'agence'|'equipe',metric:string):ChartPoint[] {
  const agencies=new Map(r.par_agence.map(a=>[a.agence_id,a.agence_nom]))
  const teams=new Map(r.par_equipe.filter(t=>t.equipe_id).map(t=>[t.equipe_id,t.equipe_nom]))
  const groups=new Map<string,ChartPoint>()
