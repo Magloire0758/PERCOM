@@ -1,10 +1,10 @@
 # PERCOM — Contexte de reprise
 
-Mise à jour : 23 septembre 2026. Application Next.js dans ce dépôt ; base Supabase PERCOM distincte du SIG PADES. Production : https://percom-ten.vercel.app ; GitHub Magloire0758/PERCOM, publication automatique Vercel après push main.
+Mise à jour : 29 septembre 2026. Application Next.js dans ce dépôt ; base Supabase PERCOM distincte du SIG PADES. Production : https://percom-ten.vercel.app ; GitHub Magloire0758/PERCOM, publication automatique Vercel après push main.
 
 ## État vérifié
 
-Dernier commit local publié précédemment : a375937 (DG). Les modifications RA/Chef et Admin sont locales, non publiées par cette intervention. Ne pas assimiler compilation locale, déclaration d’exécution SQL et recette réelle.
+Dernier commit publié avant cette livraison : 7d92389 (RA/Chef et Admin). Livraison du 29 septembre : attribution en masse Admin et DG via attribuer_objectifs_en_masse ; DG limitée aux agences, admin aux agents/équipes/agences. Backend corrigé déclaré par PADES, sans recette connectée par Codex. La nouvelle vue consolidée et les campagnes restent une proposition non implémentée. Ne pas assimiler compilation locale, déclaration d’exécution SQL et recette réelle.
 
 Agent/chef/RA/DG : reporting et exports partagés, filtres, performances et ergonomie modernisés lors des lots précédents. Admin : NetworkDashboard admin + AdminWorkspace, annuaires paginés, mutations atomiques, chefs multiples et référent, objectifs quatre niveaux, droits fixes et journal. Backend Admin jusqu’au Lot 11.5 fourni ; utilisateur confirme exécution des derniers correctifs. Aucune interrogation de base ni recette concurrente par Codex.
 
