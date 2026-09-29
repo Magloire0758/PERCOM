@@ -1,3 +1,4 @@
+import { consolidatedArgs, consolidatedModel, validObjectiveSelection, type ConsolidatedReport } from '@/lib/consolidated-objectives'
 import { validNetworkSections, selectNetworkSections, validAgencySections, selectAgencySections } from '@/lib/network-export-sections'
 import { networkModel, networkArgs, validNetworkFilters, NO_ATTACHMENT, type NetworkNames, type NetworkReport } from '@/lib/network-reporting'
 import { teamModel, type TeamReport } from '@/lib/team-reporting'
@@ -30,7 +31,8 @@ async function exportRequest(request: Request) {
   if (agentError || !agent || !['agent', 'chef', 'responsable', 'dg', 'admin'].includes(agent.role) || agent.actif !== true || agent.statut !== 'actif') return fail('Compte actif autorisé requis.', 403)
   let body
   try { body = await request.json() } catch { return fail('Requête invalide.', 400) }
-  if (!body || !['pdf', 'xlsx'].includes(body.format) || !['fiche', 'intervalle', 'statistiques', 'equipe', 'agence', 'reseau'].includes(body.type)) return fail('Format ou rapport invalide.', 400)
+  if (!body || !['pdf', 'xlsx'].includes(body.format) || !['fiche', 'intervalle', 'statistiques', 'equipe', 'agence', 'reseau', 'objectifs_consolides'].includes(body.type)) return fail('Format ou rapport invalide.', 400)
+  if (body.type === 'objectifs_consolides' && !['responsable','dg','admin'].includes(agent.role)) return fail('Compte gestionnaire requis.', 403)
   if (body.type === 'equipe' && !['chef', 'responsable', 'dg', 'admin'].includes(agent.role)) return fail('Compte chef ou responsable requis.', 403)
   if (body.type === 'agence' && !['responsable', 'dg', 'admin'].includes(agent.role)) return fail('Compte responsable requis.', 403)
   if (body.type === 'reseau' && !['dg', 'admin'].includes(agent.role)) return fail('Compte direction requis.', 403)
@@ -50,7 +52,11 @@ async function exportRequest(request: Request) {
       const p = body.periode
       if (!p || !validPeriod(p) || (Date.parse(p.fin) - Date.parse(p.debut)) / 86400000 >= 366) return fail('Choisissez une période valide de 366 jours maximum.', 400)
       if (!Array.isArray(body.statuts) || !body.statuts.length || body.statuts.length > 3 || !body.statuts.every((s: unknown) => typeof s === 'string' && STATUTS.includes(s as Statut))) return fail('Statuts invalides.', 400)
-      if (body.type === 'reseau') {
+      if (body.type === 'objectifs_consolides') {
+        if (!validObjectiveSelection(body.mesure, body.comptes, body.agenceId)) return fail('Filtres des objectifs invalides.', 400)
+        const result = await client.rpc('rapport_objectifs_consolide', consolidatedArgs(body.mesure, body.comptes, body.agenceId, p, [...new Set<Statut>(body.statuts)]))
+        model = consolidatedModel(assertRpc<ConsolidatedReport>(result.data, result.error))
+      } else if (body.type === 'reseau') {
         if (!validNetworkFilters(body.filtres)) return fail('Périmètre réseau invalide.', 400)
         const result = await client.rpc('rapport_reseau', { p_date_debut: p.debut, p_date_fin: p.fin, p_statuts: [...new Set(body.statuts)], ...networkArgs(body.filtres) })
         const report = assertRpc<NetworkReport>(result.data, result.error)

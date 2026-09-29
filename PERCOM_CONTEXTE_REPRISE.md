@@ -23,3 +23,8 @@ Référence commune : ../../ARCHITECTURE.md ; rapport détaillé ../../docs/sig/
 ## Extension validée après raccordement Admin
 
 Gestion complète des fiches, utilisateurs, agences, équipes et zones validée, avec Fiches dans Administration. Contrats manquants préparés dans ../../docs/sig/PERCOM-ADMIN-CRUD-COMPLEMENT-BACKEND-2026-09-23.md. Livraison SQL/serveur à obtenir avant raccordement des nouvelles mutations ; les limites de la livraison précédente restent effectives jusque-là. Aucun nouveau déploiement.
+
+
+## Lot 13.2 — raccordement local (29 septembre 2026)
+
+Migration déclarée appliquée par PADES. Vue Objectifs consolidés ajoutée aux statistiques DG/Admin/RA, RPC rapport_objectifs_consolide, exports PDF/Excel sous JWT utilisateur, filtres et deux taux conformes au contrat. TypeScript, ESLint et tests simulés modèle/API validés. Pas de recette connectée ni publication dans cette intervention.
