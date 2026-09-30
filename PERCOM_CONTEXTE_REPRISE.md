@@ -1,6 +1,6 @@
 # PERCOM — Contexte de reprise
 
-Mise à jour : 29 septembre 2026. Application Next.js dans ce dépôt ; base Supabase PERCOM distincte du SIG PADES. Production : https://percom-ten.vercel.app ; GitHub Magloire0758/PERCOM, publication automatique Vercel après push main.
+Mise à jour : 30 septembre 2026. Application Next.js dans ce dépôt ; base Supabase PERCOM distincte du SIG PADES. Production : https://percom-ten.vercel.app ; GitHub Magloire0758/PERCOM, publication automatique Vercel après push main.
 
 ## État vérifié
 
@@ -28,3 +28,20 @@ Gestion complète des fiches, utilisateurs, agences, équipes et zones validée,
 ## Lot 13.2 — raccordement local (29 septembre 2026)
 
 Migration déclarée appliquée par PADES. Vue Objectifs consolidés ajoutée aux statistiques DG/Admin/RA, RPC rapport_objectifs_consolide, exports PDF/Excel sous JWT utilisateur, filtres et deux taux conformes au contrat. TypeScript, ESLint et tests simulés modèle/API validés. Pas de recette connectée ni publication dans cette intervention.
+
+
+## Lot 14 — refonte locale après retour PADES
+
+Rapports collaborateurs/agences/société distincts et calendaires (jour/mois/année). Un taux ; Total ; colonnes collecte uniquement collaborateurs SMART. Nouvelle RPC `rapport_objectifs_periode` requise (contrat v2), proposition SQL non appliquée dans docs/lot14. Droits et unicité des écritures à revoir côté backend pour coexistence jour/mois/année. Ne pas publier le front avant migration et recette ; production reste au Lot 13.2 (6629da2).
+
+
+## Reprise du 29 septembre — contrat final Lots 14/15
+
+Raccordement local au contrat final (global, jour_date, mois/annee, nouvelle masse). Backend déclaré déployé par PADES ; frontend non publié. Voir `docs/sig/PERCOM-LOTS14-15-RACCORDEMENT-2026-09-29.md` dans le dossier PADES. Les propositions SQL antérieures restent historiques et ne doivent pas être appliquées.
+
+
+## Lot 16 — reprise backend par Codex (30 septembre 2026)
+
+Claude n’étant plus disponible, Codex reprend la finalisation. Le complément local `supabase/migrations/202609300005_objectifs_modeles_finalisation.sql` conserve `admin_muter_membre_equipe`, protège les changements directs d’agence, ajoute file de reprise, aperçu et renouvellement `service_role`. Il remplace la proposition 16.3b avec `admin_muter_agent`.
+
+Statut : fichier revu statiquement, non appliqué et non recetté en base. Les Lots 16.1/16.2/16.2b/16.3 fournis séparément restent prérequis. Ne pas raccorder ni publier l’interface des modèles avant compilation SQL, vérification des grants et recette réelle, notamment les scénarios concurrents.

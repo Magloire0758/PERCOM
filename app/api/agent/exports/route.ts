@@ -1,4 +1,4 @@
-import { consolidatedArgs, consolidatedModel, validObjectiveSelection, type ConsolidatedReport } from '@/lib/consolidated-objectives'
+import { consolidatedArgs, consolidatedModel, validObjectiveSelection, validObjectiveReport, objectivePeriod, type ConsolidatedReport } from '@/lib/consolidated-objectives'
 import { validNetworkSections, selectNetworkSections, validAgencySections, selectAgencySections } from '@/lib/network-export-sections'
 import { networkModel, networkArgs, validNetworkFilters, NO_ATTACHMENT, type NetworkNames, type NetworkReport } from '@/lib/network-reporting'
 import { teamModel, type TeamReport } from '@/lib/team-reporting'
@@ -49,12 +49,13 @@ async function exportRequest(request: Request) {
       const report = assertRpc<DailyReport>(result.data, result.error)
       model = dailyModel(report); suffix = report.entete.date
     } else {
-      const p = body.periode
+      const p = body.type === 'objectifs_consolides' ? objectivePeriod(body.periodicite, body.dateReference) : body.periode
       if (!p || !validPeriod(p) || (Date.parse(p.fin) - Date.parse(p.debut)) / 86400000 >= 366) return fail('Choisissez une période valide de 366 jours maximum.', 400)
       if (!Array.isArray(body.statuts) || !body.statuts.length || body.statuts.length > 3 || !body.statuts.every((s: unknown) => typeof s === 'string' && STATUTS.includes(s as Statut))) return fail('Statuts invalides.', 400)
       if (body.type === 'objectifs_consolides') {
-        if (!validObjectiveSelection(body.mesure, body.comptes, body.agenceId)) return fail('Filtres des objectifs invalides.', 400)
-        const result = await client.rpc('rapport_objectifs_consolide', consolidatedArgs(body.mesure, body.comptes, body.agenceId, p, [...new Set<Statut>(body.statuts)]))
+        if (!validObjectiveSelection(body.mesure, body.comptes, body.agenceId) || !validObjectiveReport(body.niveau, body.periodicite, body.dateReference, body.agenceId, body.comptes)) return fail('Filtres des objectifs invalides.', 400)
+        if (body.niveau === 'global' && agent.role === 'responsable') return fail('Vue société réservée à la direction.', 403)
+        const result = await client.rpc('rapport_objectifs_periode', consolidatedArgs(body.mesure, body.comptes, body.agenceId, body.niveau, body.periodicite, body.dateReference, [...new Set<Statut>(body.statuts)]))
         model = consolidatedModel(assertRpc<ConsolidatedReport>(result.data, result.error))
       } else if (body.type === 'reseau') {
         if (!validNetworkFilters(body.filtres)) return fail('Périmètre réseau invalide.', 400)

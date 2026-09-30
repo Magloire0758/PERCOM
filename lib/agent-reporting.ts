@@ -2,7 +2,7 @@ export const STATUTS = ['en_attente', 'a_corriger', 'validee'] as const
 export type Statut = typeof STATUTS[number]
 export type Period = { debut: string; fin: string }
 export type ExportRequest = { format: 'pdf' | 'xlsx' } & (
-  | { type: 'objectifs_consolides'; mesure: import('./consolidated-objectives').ObjectiveMeasure; comptes: import('./consolidated-objectives').ObjectiveAccounts; agenceId: string|null; periode: Period; statuts: Statut[] }
+  | { type: 'objectifs_consolides'; mesure: import('./consolidated-objectives').ObjectiveMeasure; comptes: import('./consolidated-objectives').ObjectiveAccounts; agenceId: string|null; niveau: import('./consolidated-objectives').ObjectiveLevel; periodicite: import('./consolidated-objectives').ObjectiveFrequency; dateReference: string; statuts: Statut[] }
   | { type: 'fiche'; ficheId: string }
   | { type: 'equipe'; equipeId?: string; periode: Period; statuts: Statut[]; inclureChef: boolean }
   | { type: 'reseau'; sections?: import('./network-export-sections').NetworkSectionId[]; filtres: import('./network-reporting').NetworkFilters; periode: Period; statuts: Statut[] }
